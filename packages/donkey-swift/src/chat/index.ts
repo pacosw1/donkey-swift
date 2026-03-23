@@ -43,13 +43,6 @@ export interface WSEvent {
   payload?: unknown;
 }
 
-// ── Migrations ──────────────────────────────────────────────────────────────
-
-export const migrations = [
-  { name: "chat: create chat_messages", sql: `CREATE TABLE IF NOT EXISTS chat_messages (id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, sender TEXT NOT NULL DEFAULT 'user', message TEXT NOT NULL, message_type TEXT NOT NULL DEFAULT 'text', read_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())` },
-  { name: "chat: index chat_messages", sql: `CREATE INDEX IF NOT EXISTS idx_chat_messages_user ON chat_messages(user_id, created_at)` },
-];
-
 // ── WebSocket Hub ───────────────────────────────────────────────────────────
 
 interface WSConn {

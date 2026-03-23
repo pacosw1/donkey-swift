@@ -54,14 +54,6 @@ export interface ReceiptConfig {
   environment?: string;
 }
 
-// ── Migrations ──────────────────────────────────────────────────────────────
-
-export const migrations = [
-  { name: "receipt: create verified_transactions", sql: `CREATE TABLE IF NOT EXISTS verified_transactions (transaction_id TEXT PRIMARY KEY, original_transaction_id TEXT NOT NULL, user_id TEXT NOT NULL, product_id TEXT NOT NULL, status TEXT NOT NULL, purchase_date TIMESTAMPTZ NOT NULL, expires_date TIMESTAMPTZ, environment TEXT NOT NULL DEFAULT 'Production', price_cents INTEGER NOT NULL DEFAULT 0, currency_code TEXT NOT NULL DEFAULT 'USD', notification_type TEXT NOT NULL DEFAULT '', verified_at TIMESTAMPTZ NOT NULL DEFAULT NOW())` },
-  { name: "receipt: index original_transaction_id", sql: `CREATE INDEX IF NOT EXISTS idx_verified_tx_orig ON verified_transactions(original_transaction_id)` },
-  { name: "receipt: index user_verified_at", sql: `CREATE INDEX IF NOT EXISTS idx_verified_tx_user ON verified_transactions(user_id, verified_at)` },
-];
-
 // ── Apple Root CA ───────────────────────────────────────────────────────────
 
 const APPLE_ROOT_CA_PEM = `-----BEGIN CERTIFICATE-----

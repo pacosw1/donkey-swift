@@ -49,15 +49,6 @@ export interface NotificationDelivery {
   sent_at: Date;
 }
 
-// ── Migrations ──────────────────────────────────────────────────────────────
-
-export const migrations = [
-  { name: "notify: create user_device_tokens", sql: `CREATE TABLE IF NOT EXISTS user_device_tokens (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token TEXT NOT NULL, platform TEXT NOT NULL DEFAULT 'ios', device_model TEXT NOT NULL DEFAULT '', os_version TEXT NOT NULL DEFAULT '', app_version TEXT NOT NULL DEFAULT '', enabled BOOLEAN NOT NULL DEFAULT TRUE, last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(user_id, token))` },
-  { name: "notify: create user_notification_preferences", sql: `CREATE TABLE IF NOT EXISTS user_notification_preferences (user_id TEXT PRIMARY KEY, push_enabled BOOLEAN NOT NULL DEFAULT TRUE, interval_seconds INTEGER NOT NULL DEFAULT 3600, wake_hour INTEGER NOT NULL DEFAULT 8, sleep_hour INTEGER NOT NULL DEFAULT 22, timezone TEXT NOT NULL DEFAULT 'America/New_York', stop_after_goal BOOLEAN NOT NULL DEFAULT TRUE)` },
-  { name: "notify: create notification_deliveries", sql: `CREATE TABLE IF NOT EXISTS notification_deliveries (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'reminder', title TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'sent', sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW())` },
-  { name: "notify: index notification_deliveries", sql: `CREATE INDEX IF NOT EXISTS idx_notification_deliveries_user ON notification_deliveries(user_id, sent_at)` },
-];
-
 // ── Service ─────────────────────────────────────────────────────────────────
 
 export class NotifyService {

@@ -45,20 +45,6 @@ export interface EngageConfig {
   paywallTrigger?: (data: EngagementData) => string;
 }
 
-// ── Migrations ──────────────────────────────────────────────────────────────
-
-export const migrations = [
-  { name: "engage: create user_subscriptions", sql: `CREATE TABLE IF NOT EXISTS user_subscriptions (user_id TEXT PRIMARY KEY, product_id TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'free', expires_at TIMESTAMPTZ, started_at TIMESTAMPTZ, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())` },
-  { name: "engage: add original_transaction_id", sql: `DO $$ BEGIN ALTER TABLE user_subscriptions ADD COLUMN original_transaction_id TEXT NOT NULL DEFAULT ''; EXCEPTION WHEN duplicate_column THEN NULL; END $$` },
-  { name: "engage: add price_cents", sql: `DO $$ BEGIN ALTER TABLE user_subscriptions ADD COLUMN price_cents INTEGER NOT NULL DEFAULT 0; EXCEPTION WHEN duplicate_column THEN NULL; END $$` },
-  { name: "engage: add currency_code", sql: `DO $$ BEGIN ALTER TABLE user_subscriptions ADD COLUMN currency_code TEXT NOT NULL DEFAULT 'USD'; EXCEPTION WHEN duplicate_column THEN NULL; END $$` },
-  { name: "engage: create user_activity", sql: `CREATE TABLE IF NOT EXISTS user_activity (id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, event TEXT NOT NULL, metadata JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())` },
-  { name: "engage: index user_activity", sql: `CREATE INDEX IF NOT EXISTS idx_user_activity_user_event ON user_activity(user_id, event, created_at)` },
-  { name: "engage: create user_feedback", sql: `CREATE TABLE IF NOT EXISTS user_feedback (id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'general', message TEXT NOT NULL, app_version TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())` },
-  { name: "engage: create user_sessions", sql: `CREATE TABLE IF NOT EXISTS user_sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), ended_at TIMESTAMPTZ, duration_s INTEGER DEFAULT 0, app_version TEXT NOT NULL DEFAULT '', os_version TEXT NOT NULL DEFAULT '', country TEXT NOT NULL DEFAULT '')` },
-  { name: "engage: index user_sessions", sql: `CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id, started_at)` },
-];
-
 // ── Default Paywall Trigger ─────────────────────────────────────────────────
 
 export function defaultPaywallTrigger(data: EngagementData): string {

@@ -21,13 +21,6 @@ export interface Flag {
   updated_at: Date;
 }
 
-// ── Migrations ──────────────────────────────────────────────────────────────
-
-export const migrations = [
-  { name: "flags: create feature_flags", sql: `CREATE TABLE IF NOT EXISTS feature_flags (key TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL DEFAULT TRUE, rollout_pct INTEGER NOT NULL DEFAULT 100, description TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())` },
-  { name: "flags: create feature_flag_overrides", sql: `CREATE TABLE IF NOT EXISTS feature_flag_overrides (flag_key TEXT NOT NULL, user_id TEXT NOT NULL, enabled BOOLEAN NOT NULL, PRIMARY KEY (flag_key, user_id))` },
-];
-
 // ── CRC32 for deterministic rollout ─────────────────────────────────────────
 
 function crc32(str: string): number {

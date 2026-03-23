@@ -10,12 +10,6 @@ export interface AttestDB {
 
 export interface AttestConfig {}
 
-// ── Migrations ──────────────────────────────────────────────────────────────
-
-export const migrations = [
-  { name: "attest: create user_attest_keys", sql: `CREATE TABLE IF NOT EXISTS user_attest_keys (user_id TEXT PRIMARY KEY, key_id TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())` },
-];
-
 // ── Service ─────────────────────────────────────────────────────────────────
 
 export class AttestService {

@@ -64,13 +64,6 @@ export interface SyncConfig {
   idempotencyTtlMs?: number;
 }
 
-// ── Migrations ──────────────────────────────────────────────────────────────
-
-export const migrations = [
-  { name: "sync: create tombstones", sql: `CREATE TABLE IF NOT EXISTS tombstones (entity_type VARCHAR NOT NULL, entity_id TEXT NOT NULL, user_id TEXT NOT NULL, deleted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY (entity_type, entity_id, user_id))` },
-  { name: "sync: index tombstones", sql: `CREATE INDEX IF NOT EXISTS idx_tombstones_user_deleted ON tombstones(user_id, deleted_at)` },
-];
-
 // ── Service ─────────────────────────────────────────────────────────────────
 
 const HEADER_DEVICE_ID = "x-device-id";

@@ -33,22 +33,6 @@ export interface AuthConfig {
   productionEnv?: boolean;
 }
 
-// ── Migrations ──────────────────────────────────────────────────────────────
-
-export const migrations = [
-  {
-    name: "auth: create users table",
-    sql: `CREATE TABLE IF NOT EXISTS users (
-      id            TEXT PRIMARY KEY,
-      apple_sub     TEXT UNIQUE NOT NULL,
-      email         TEXT NOT NULL DEFAULT '',
-      name          TEXT NOT NULL DEFAULT '',
-      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      last_login_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )`,
-  },
-];
-
 // ── Service ─────────────────────────────────────────────────────────────────
 
 export class AuthService {
