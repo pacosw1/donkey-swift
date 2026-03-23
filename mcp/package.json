@@ -1,0 +1,16 @@
+{
+  "name": "donkey-swift-mcp",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "MCP server for donkey-swift package documentation",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "index": "node indexer.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "better-sqlite3": "^11.0.0",
+    "zod": "^3.22.0"
+  }
+}
