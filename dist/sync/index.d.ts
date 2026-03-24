@@ -53,6 +53,8 @@ export interface SyncConfig {
     deviceTokens?: DeviceTokenStore;
     /** Idempotency TTL in ms (default: 24h). */
     idempotencyTtlMs?: number;
+    /** Debounce silent push notifications per user (default: 2500ms, 0 = no debounce). */
+    pushDebounceMs?: number;
 }
 export declare class SyncService {
     private db;
@@ -61,6 +63,8 @@ export declare class SyncService {
     private tokens?;
     private idempCache;
     private idempTtlMs;
+    private pushDebounceMs;
+    private pendingPush;
     private cleanupInterval;
     constructor(db: SyncDB, handler: EntityHandler, cfg?: SyncConfig);
     close(): void;
@@ -100,5 +104,6 @@ export declare class SyncService {
         status: string;
     }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
     private notifyOtherDevices;
+    private fireNotify;
 }
 //# sourceMappingURL=index.d.ts.map

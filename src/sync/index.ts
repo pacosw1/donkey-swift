@@ -62,6 +62,8 @@ export interface SyncConfig {
   deviceTokens?: DeviceTokenStore;
   /** Idempotency TTL in ms (default: 24h). */
   idempotencyTtlMs?: number;
+  /** Debounce silent push notifications per user (default: 2500ms, 0 = no debounce). */
+  pushDebounceMs?: number;
 }
 
 // ── Service ─────────────────────────────────────────────────────────────────
@@ -79,6 +81,8 @@ export class SyncService {
   private tokens?: DeviceTokenStore;
   private idempCache = new Map<string, IdempEntry>();
   private idempTtlMs: number;
+  private pushDebounceMs: number;
+  private pendingPush = new Map<string, { timer: ReturnType<typeof setTimeout>; excludeDeviceId: string }>();
   private cleanupInterval: ReturnType<typeof setInterval>;
 
   constructor(
@@ -89,6 +93,7 @@ export class SyncService {
     this.push = cfg?.push;
     this.tokens = cfg?.deviceTokens;
     this.idempTtlMs = cfg?.idempotencyTtlMs ?? 24 * 60 * 60 * 1000;
+    this.pushDebounceMs = cfg?.pushDebounceMs ?? 2500;
 
     this.cleanupInterval = setInterval(() => {
       const now = Date.now();
@@ -100,6 +105,8 @@ export class SyncService {
 
   close(): void {
     clearInterval(this.cleanupInterval);
+    for (const { timer } of this.pendingPush.values()) clearTimeout(timer);
+    this.pendingPush.clear();
   }
 
   /** GET /api/v1/sync/changes?since={ISO8601} */
@@ -232,8 +239,26 @@ export class SyncService {
   private notifyOtherDevices(userId: string, excludeDeviceId: string): void {
     if (!this.push || !this.tokens) return;
 
-    // Fire and forget
-    this.tokens.enabledTokensForUser(userId).then((devices) => {
+    // No debounce — fire immediately
+    if (this.pushDebounceMs <= 0) {
+      this.fireNotify(userId, excludeDeviceId);
+      return;
+    }
+
+    // Debounce: reset timer on each call, only fire after quiet period
+    const existing = this.pendingPush.get(userId);
+    if (existing) clearTimeout(existing.timer);
+
+    const timer = setTimeout(() => {
+      this.pendingPush.delete(userId);
+      this.fireNotify(userId, excludeDeviceId);
+    }, this.pushDebounceMs);
+
+    this.pendingPush.set(userId, { timer, excludeDeviceId });
+  }
+
+  private fireNotify(userId: string, excludeDeviceId: string): void {
+    this.tokens!.enabledTokensForUser(userId).then((devices) => {
       const data = { action: "sync" };
       for (const d of devices) {
         if (d.deviceId === excludeDeviceId) continue;

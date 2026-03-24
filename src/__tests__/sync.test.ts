@@ -205,16 +205,138 @@ describe("SyncService", () => {
     });
   });
 
+  describe("push debounce", () => {
+    it("debounces rapid sync writes into one silent push", async () => {
+      vi.useFakeTimers();
+      const sendSilent = vi.fn().mockResolvedValue(undefined);
+      const push = { send: vi.fn(), sendWithData: vi.fn(), sendSilent };
+      const enabledTokensForUser = vi.fn().mockResolvedValue([
+        { deviceId: "device-B", token: "token-B" },
+      ]);
+      const batchUpsert = vi.fn().mockResolvedValue({
+        items: [{ client_id: "c-1", server_id: "s-1", version: 1 }],
+        errors: [],
+      });
+      const db = mockSyncDB();
+      const handler = mockEntityHandler({ batchUpsert });
+      svc = new SyncService(db, handler, {
+        push,
+        deviceTokens: { enabledTokensForUser },
+        pushDebounceMs: 2500,
+      });
+      const app = buildApp(svc);
+
+      const req = {
+        method: "POST" as const,
+        headers: { "Content-Type": "application/json", "x-device-id": "device-A" },
+        body: JSON.stringify({
+          items: [{ client_id: "c-1", entity_type: "habit", version: 1, fields: {} }],
+        }),
+      };
+
+      // 3 rapid syncs within debounce window
+      await app.request("/sync/batch", req);
+      await app.request("/sync/batch", req);
+      await app.request("/sync/batch", req);
+
+      // No push yet — still within debounce window
+      expect(sendSilent).not.toHaveBeenCalled();
+
+      // Advance past debounce window
+      await vi.advanceTimersByTimeAsync(3000);
+
+      // Only ONE silent push should have fired
+      expect(sendSilent).toHaveBeenCalledTimes(1);
+      expect(sendSilent).toHaveBeenCalledWith("token-B", { action: "sync" });
+
+      vi.useRealTimers();
+    });
+
+    it("fires immediately when pushDebounceMs is 0", async () => {
+      const sendSilent = vi.fn().mockResolvedValue(undefined);
+      const push = { send: vi.fn(), sendWithData: vi.fn(), sendSilent };
+      const enabledTokensForUser = vi.fn().mockResolvedValue([
+        { deviceId: "device-B", token: "token-B" },
+      ]);
+      const batchUpsert = vi.fn().mockResolvedValue({
+        items: [{ client_id: "c-1", server_id: "s-1", version: 1 }],
+        errors: [],
+      });
+      const db = mockSyncDB();
+      const handler = mockEntityHandler({ batchUpsert });
+      svc = new SyncService(db, handler, {
+        push,
+        deviceTokens: { enabledTokensForUser },
+        pushDebounceMs: 0,
+      });
+      const app = buildApp(svc);
+
+      await app.request("/sync/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-device-id": "device-A" },
+        body: JSON.stringify({
+          items: [{ client_id: "c-1", entity_type: "habit", version: 1, fields: {} }],
+        }),
+      });
+
+      // Wait for the fire-and-forget promise
+      await new Promise((r) => setTimeout(r, 50));
+      expect(sendSilent).toHaveBeenCalledTimes(1);
+    });
+
+    it("excludes the originating device from push", async () => {
+      vi.useFakeTimers();
+      const sendSilent = vi.fn().mockResolvedValue(undefined);
+      const push = { send: vi.fn(), sendWithData: vi.fn(), sendSilent };
+      const enabledTokensForUser = vi.fn().mockResolvedValue([
+        { deviceId: "device-A", token: "token-A" },
+        { deviceId: "device-B", token: "token-B" },
+        { deviceId: "device-C", token: "token-C" },
+      ]);
+      const batchUpsert = vi.fn().mockResolvedValue({
+        items: [{ client_id: "c-1", server_id: "s-1", version: 1 }],
+        errors: [],
+      });
+      const db = mockSyncDB();
+      const handler = mockEntityHandler({ batchUpsert });
+      svc = new SyncService(db, handler, {
+        push,
+        deviceTokens: { enabledTokensForUser },
+        pushDebounceMs: 2000,
+      });
+      const app = buildApp(svc);
+
+      await app.request("/sync/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-device-id": "device-A" },
+        body: JSON.stringify({
+          items: [{ client_id: "c-1", entity_type: "habit", version: 1, fields: {} }],
+        }),
+      });
+
+      await vi.advanceTimersByTimeAsync(2500);
+
+      // Should push to B and C but NOT A
+      expect(sendSilent).toHaveBeenCalledTimes(2);
+      expect(sendSilent).toHaveBeenCalledWith("token-B", { action: "sync" });
+      expect(sendSilent).toHaveBeenCalledWith("token-C", { action: "sync" });
+
+      vi.useRealTimers();
+    });
+  });
+
   describe("close", () => {
-    it("clears cleanup interval", () => {
+    it("clears cleanup interval and pending push timers", () => {
       const db = mockSyncDB();
       const handler = mockEntityHandler();
       svc = new SyncService(db, handler);
 
-      const spy = vi.spyOn(global, "clearInterval");
+      const clearIntervalSpy = vi.spyOn(global, "clearInterval");
+      const clearTimeoutSpy = vi.spyOn(global, "clearTimeout");
       svc.close();
-      expect(spy).toHaveBeenCalled();
-      spy.mockRestore();
+      expect(clearIntervalSpy).toHaveBeenCalled();
+      clearIntervalSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
     });
   });
 });

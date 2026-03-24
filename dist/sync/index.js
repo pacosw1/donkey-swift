@@ -8,6 +8,8 @@ export class SyncService {
     tokens;
     idempCache = new Map();
     idempTtlMs;
+    pushDebounceMs;
+    pendingPush = new Map();
     cleanupInterval;
     constructor(db, handler, cfg) {
         this.db = db;
@@ -15,6 +17,7 @@ export class SyncService {
         this.push = cfg?.push;
         this.tokens = cfg?.deviceTokens;
         this.idempTtlMs = cfg?.idempotencyTtlMs ?? 24 * 60 * 60 * 1000;
+        this.pushDebounceMs = cfg?.pushDebounceMs ?? 2500;
         this.cleanupInterval = setInterval(() => {
             const now = Date.now();
             for (const [k, entry] of this.idempCache) {
@@ -25,6 +28,9 @@ export class SyncService {
     }
     close() {
         clearInterval(this.cleanupInterval);
+        for (const { timer } of this.pendingPush.values())
+            clearTimeout(timer);
+        this.pendingPush.clear();
     }
     /** GET /api/v1/sync/changes?since={ISO8601} */
     handleSyncChanges = async (c) => {
@@ -150,7 +156,22 @@ export class SyncService {
     notifyOtherDevices(userId, excludeDeviceId) {
         if (!this.push || !this.tokens)
             return;
-        // Fire and forget
+        // No debounce — fire immediately
+        if (this.pushDebounceMs <= 0) {
+            this.fireNotify(userId, excludeDeviceId);
+            return;
+        }
+        // Debounce: reset timer on each call, only fire after quiet period
+        const existing = this.pendingPush.get(userId);
+        if (existing)
+            clearTimeout(existing.timer);
+        const timer = setTimeout(() => {
+            this.pendingPush.delete(userId);
+            this.fireNotify(userId, excludeDeviceId);
+        }, this.pushDebounceMs);
+        this.pendingPush.set(userId, { timer, excludeDeviceId });
+    }
+    fireNotify(userId, excludeDeviceId) {
         this.tokens.enabledTokensForUser(userId).then((devices) => {
             const data = { action: "sync" };
             for (const d of devices) {
