@@ -81,6 +81,8 @@ export declare class ChatService {
         error: string;
     }, 500, "json">) | (Response & import("hono").TypedResponse<{
         status: string;
+        id: number;
+        created_at: string;
     }, 201, "json">)>;
     /** GET /api/v1/chat/unread */
     handleUnreadCount: (c: Context) => Promise<Response & import("hono").TypedResponse<{

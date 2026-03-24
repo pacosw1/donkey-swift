@@ -141,5 +141,49 @@ describe("ReceiptService", () => {
     it("maps DID_RENEW to active", () => {
       expect(callNotificationToStatus("DID_RENEW", "", {})).toBe("active");
     });
+
+    it("maps REFUND to refunded", () => {
+      expect(callNotificationToStatus("REFUND", "", {})).toBe("refunded");
+    });
+
+    it("maps REVOKE to revoked", () => {
+      expect(callNotificationToStatus("REVOKE", "", {})).toBe("revoked");
+    });
+
+    it("maps DID_FAIL_TO_RENEW with GRACE_PERIOD to grace_period", () => {
+      expect(callNotificationToStatus("DID_FAIL_TO_RENEW", "GRACE_PERIOD", {})).toBe("grace_period");
+    });
+
+    it("maps DID_FAIL_TO_RENEW without subtype to billing_retry_failed", () => {
+      expect(callNotificationToStatus("DID_FAIL_TO_RENEW", "", {})).toBe("billing_retry_failed");
+    });
+
+    it("maps PRICE_INCREASE with ACCEPTED to active", () => {
+      expect(callNotificationToStatus("PRICE_INCREASE", "ACCEPTED", {})).toBe("active");
+    });
+
+    it("maps PRICE_INCREASE without subtype to price_increase_pending", () => {
+      expect(callNotificationToStatus("PRICE_INCREASE", "", {})).toBe("price_increase_pending");
+    });
+
+    it("maps GRACE_PERIOD_EXPIRED to expired", () => {
+      expect(callNotificationToStatus("GRACE_PERIOD_EXPIRED", "", {})).toBe("expired");
+    });
+
+    it("maps DID_CHANGE_RENEWAL_STATUS AUTO_RENEW_DISABLED to cancelled", () => {
+      expect(callNotificationToStatus("DID_CHANGE_RENEWAL_STATUS", "AUTO_RENEW_DISABLED", {})).toBe("cancelled");
+    });
+
+    it("maps DID_CHANGE_RENEWAL_STATUS without subtype to active", () => {
+      expect(callNotificationToStatus("DID_CHANGE_RENEWAL_STATUS", "", {})).toBe("active");
+    });
+
+    it("maps OFFER_REDEEMED to active", () => {
+      expect(callNotificationToStatus("OFFER_REDEEMED", "", {})).toBe("active");
+    });
+
+    it("maps RENEWAL_EXTENDED to active", () => {
+      expect(callNotificationToStatus("RENEWAL_EXTENDED", "", {})).toBe("active");
+    });
   });
 });

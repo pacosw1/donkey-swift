@@ -125,6 +125,8 @@ export class NotifyScheduler {
     intervalMs;
     tickFn;
     extraTick;
+    goalCheck;
+    concurrency;
     interval = null;
     constructor(db, push, cfg) {
         this.db = db;
@@ -132,17 +134,19 @@ export class NotifyScheduler {
         this.intervalMs = cfg.intervalMs ?? 15 * 60 * 1000;
         this.tickFn = cfg.tickFunc;
         this.extraTick = cfg.extraTick;
+        this.goalCheck = cfg.goalCheck;
+        this.concurrency = cfg.concurrency ?? 50;
     }
     start() {
         this.evaluate();
         this.interval = setInterval(() => this.evaluate(), this.intervalMs);
-        console.log(`[scheduler] started with interval ${this.intervalMs}ms`);
+        console.log(`[notify-scheduler] started with interval ${this.intervalMs}ms`);
     }
     stop() {
         if (this.interval)
             clearInterval(this.interval);
         this.interval = null;
-        console.log("[scheduler] stopped");
+        console.log("[notify-scheduler] stopped");
     }
     async evaluate() {
         const start = Date.now();
@@ -151,18 +155,20 @@ export class NotifyScheduler {
             userIds = await this.db.allUsersWithNotificationsEnabled();
         }
         catch (err) {
-            console.log(`[scheduler] error fetching users: ${err}`);
+            console.log(`[notify-scheduler] error fetching users: ${err}`);
             return;
         }
         if (!userIds.length)
             return;
-        console.log(`[scheduler] evaluating ${userIds.length} users`);
-        for (const uid of userIds) {
-            await this.maybeNotify(uid);
+        console.log(`[notify-scheduler] evaluating ${userIds.length} users`);
+        // Process in concurrent batches
+        for (let i = 0; i < userIds.length; i += this.concurrency) {
+            const batch = userIds.slice(i, i + this.concurrency);
+            await Promise.allSettled(batch.map((uid) => this.maybeNotify(uid)));
         }
         if (this.extraTick)
             await this.extraTick();
-        console.log(`[scheduler] tick complete in ${Date.now() - start}ms`);
+        console.log(`[notify-scheduler] tick complete in ${Date.now() - start}ms`);
     }
     async maybeNotify(userId) {
         const prefs = await this.db.getNotificationPreferences(userId).catch(() => null);
@@ -170,9 +176,15 @@ export class NotifyScheduler {
             return;
         // Check waking hours using user's timezone
         const now = new Date();
-        const currentHour = parseInt(new Intl.DateTimeFormat("en", { hour: "numeric", hour12: false, timeZone: prefs.timezone }).format(now), 10);
+        const currentHour = getHourInTimezone(now, prefs.timezone);
         if (currentHour < prefs.wake_hour || currentHour >= prefs.sleep_hour)
             return;
+        // Check stop_after_goal
+        if (prefs.stop_after_goal && this.goalCheck) {
+            const goalMet = await this.goalCheck(userId).catch(() => false);
+            if (goalMet)
+                return;
+        }
         // Check interval since last notification
         const last = await this.db.lastNotificationDelivery(userId).catch(() => null);
         if (last) {
@@ -186,13 +198,32 @@ export class NotifyScheduler {
         await this.tickFn(userId, prefs, tokens, this.push);
     }
 }
-export async function defaultTick(userId, _prefs, tokens, push) {
+/** Get the current hour (0-23) in a timezone. Handles midnight correctly. */
+export function getHourInTimezone(date, timezone) {
+    try {
+        const parts = new Intl.DateTimeFormat("en-US", {
+            hour: "numeric",
+            hourCycle: "h23",
+            timeZone: timezone,
+        }).formatToParts(date);
+        const hourPart = parts.find((p) => p.type === "hour");
+        return hourPart ? parseInt(hourPart.value, 10) : date.getHours();
+    }
+    catch {
+        return date.getHours(); // fallback to server timezone
+    }
+}
+/**
+ * Example tick function. Replace with your app-specific notification logic.
+ * This exists as a reference — do not use in production without customizing the copy.
+ */
+export async function exampleTick(userId, _prefs, tokens, push) {
     for (const token of tokens) {
         try {
-            await push.send(token.token, "Hey!", "Don't forget to check in today.");
+            await push.send(token.token, "Reminder", "Don't forget to check in today.");
         }
         catch (err) {
-            console.log(`[scheduler] push failed for ${userId}: ${err}`);
+            console.log(`[notify-scheduler] push failed for ${userId}: ${err}`);
         }
     }
 }

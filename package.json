@@ -34,7 +34,8 @@
     "./flags": "./dist/flags/index.js",
     "./lifecycle": "./dist/lifecycle/index.js",
     "./analytics": "./dist/analytics/index.js",
-    "./app": "./dist/app/index.js"
+    "./app": "./dist/app/index.js",
+    "./appstore": "./dist/appstore/index.js"
   },
   "typesVersions": {
     "*": {
@@ -103,6 +104,9 @@
       ],
       "app": [
         "dist/app/index.d.ts"
+      ],
+      "appstore": [
+        "dist/appstore/index.d.ts"
       ]
     }
   },

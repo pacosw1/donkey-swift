@@ -2,8 +2,11 @@ import { describe, it, expect, vi } from "vitest";
 import { Hono } from "hono";
 import {
   NotifyService,
+  getHourInTimezone,
+  exampleTick,
   type NotifyDB,
   type NotificationPreferences,
+  type DeviceToken,
 } from "../notify/index.js";
 import type { PushProvider } from "../push/index.js";
 
@@ -192,5 +195,112 @@ describe("NotifyService", () => {
       expect(body.wake_hour).toBe(9);
       expect(upsert).toHaveBeenCalled();
     });
+  });
+});
+
+// ── getHourInTimezone ───────────────────────────────────────────────────────
+
+describe("getHourInTimezone", () => {
+  it("returns correct hour for a known timezone", () => {
+    // Create a date with a known UTC time: 2025-06-15T14:30:00Z (2:30 PM UTC)
+    const date = new Date("2025-06-15T14:30:00Z");
+    // America/New_York is UTC-4 in summer (EDT), so 14:00 UTC = 10:30 AM ET
+    const hour = getHourInTimezone(date, "America/New_York");
+    expect(hour).toBe(10);
+  });
+
+  it("returns correct hour for UTC timezone", () => {
+    const date = new Date("2025-06-15T23:15:00Z");
+    const hour = getHourInTimezone(date, "UTC");
+    expect(hour).toBe(23);
+  });
+
+  it("handles midnight correctly", () => {
+    const date = new Date("2025-06-15T00:05:00Z");
+    const hour = getHourInTimezone(date, "UTC");
+    expect(hour).toBe(0);
+  });
+
+  it("falls back to local hour for invalid timezone", () => {
+    const date = new Date("2025-06-15T12:00:00Z");
+    // Invalid timezone should fall back to date.getHours()
+    const hour = getHourInTimezone(date, "Invalid/Timezone");
+    expect(typeof hour).toBe("number");
+    expect(hour).toBeGreaterThanOrEqual(0);
+    expect(hour).toBeLessThanOrEqual(23);
+  });
+
+  it("returns correct hour for a timezone ahead of UTC", () => {
+    // Asia/Tokyo is UTC+9
+    const date = new Date("2025-06-15T20:00:00Z");
+    // 20:00 UTC + 9 = 05:00 next day
+    const hour = getHourInTimezone(date, "Asia/Tokyo");
+    expect(hour).toBe(5);
+  });
+});
+
+// ── exampleTick ─────────────────────────────────────────────────────────────
+
+describe("exampleTick", () => {
+  it("calls push.send for each device token", async () => {
+    const push = mockPush();
+    const tokens: DeviceToken[] = [
+      {
+        id: "dt-1",
+        user_id: "user-1",
+        token: "apns-token-1",
+        platform: "ios",
+        device_model: "iPhone15,2",
+        os_version: "17.0",
+        app_version: "1.0.0",
+        enabled: true,
+        last_seen_at: new Date(),
+      },
+      {
+        id: "dt-2",
+        user_id: "user-1",
+        token: "apns-token-2",
+        platform: "ios",
+        device_model: "iPad13,1",
+        os_version: "17.0",
+        app_version: "1.0.0",
+        enabled: true,
+        last_seen_at: new Date(),
+      },
+    ];
+
+    await exampleTick("user-1", defaultPrefs(), tokens, push);
+
+    expect(push.send).toHaveBeenCalledTimes(2);
+    expect(push.send).toHaveBeenCalledWith("apns-token-1", "Reminder", "Don't forget to check in today.");
+    expect(push.send).toHaveBeenCalledWith("apns-token-2", "Reminder", "Don't forget to check in today.");
+  });
+
+  it("handles push failure gracefully", async () => {
+    const push = mockPush();
+    (push.send as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("push failed"));
+
+    const tokens: DeviceToken[] = [
+      {
+        id: "dt-1",
+        user_id: "user-1",
+        token: "bad-token",
+        platform: "ios",
+        device_model: "",
+        os_version: "",
+        app_version: "",
+        enabled: true,
+        last_seen_at: new Date(),
+      },
+    ];
+
+    // Should not throw — errors are caught internally
+    await expect(exampleTick("user-1", defaultPrefs(), tokens, push)).resolves.toBeUndefined();
+  });
+
+  it("does nothing with empty tokens array", async () => {
+    const push = mockPush();
+    await exampleTick("user-1", defaultPrefs(), [], push);
+    expect(push.send).not.toHaveBeenCalled();
   });
 });

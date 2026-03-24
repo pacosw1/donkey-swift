@@ -29,7 +29,33 @@ export interface Prompt {
 export interface StageRule {
     name: string;
     stage: Stage;
-    matches: (score: number, daysSinceActive: number, createdDaysAgo: number, ahaReached: boolean, isPro: boolean) => boolean;
+    matches: (ctx: StageContext) => boolean;
+}
+export interface StageContext {
+    score: number;
+    daysSinceActive: number;
+    createdDaysAgo: number;
+    ahaReached: boolean;
+    isPro: boolean;
+}
+/** Configurable scoring weights. */
+export interface ScoreWeights {
+    /** Max score from recent sessions (default: 40). */
+    recentSessionsMax?: number;
+    /** Score per recent session (default: 6, capped at recentSessionsMax). */
+    recentSessionsPerSession?: number;
+    /** Bonus for reaching an aha moment (default: 20). */
+    ahaBonus?: number;
+    /** Bonus for being a pro/paying user (default: 20). */
+    proBonus?: number;
+    /** Bonus for activity today (default: 10). */
+    activeTodayBonus?: number;
+    /** Bonus for activity in last 2 days (default: 5). */
+    activeRecentBonus?: number;
+    /** Max score from total sessions (default: 10). */
+    totalSessionsMax?: number;
+    /** Sessions divisor for total sessions score (default: 3). */
+    totalSessionsDivisor?: number;
 }
 export interface LifecycleDB {
     userCreatedAndLastActive(userId: string): Promise<{
@@ -52,14 +78,21 @@ export interface LifecycleConfig {
     ahaMomentRules?: AhaMomentRule[];
     customStages?: StageRule[];
     promptBuilder?: (userId: string, es: EngagementScore) => Promise<Prompt | null>;
+    /** Days between prompts of the same type (default: 3). */
     promptCooldownDays?: number;
+    /** Max number of prompts of each type per 30-day window. Prevents prompt fatigue. */
+    maxPromptsPerType?: Record<PromptType, number>;
+    /** Custom scoring weights. */
+    scoreWeights?: ScoreWeights;
 }
 export declare class LifecycleService {
     private cfg;
     private db;
     private push;
+    private weights;
     constructor(cfg: LifecycleConfig, db: LifecycleDB, push: PushProvider);
     evaluateUser(userId: string): Promise<EngagementScore>;
+    calculateScore(recentSessions: number, ahaReached: boolean, isPro: boolean, daysSinceActive: number, totalSessions: number): number;
     private checkAhaMoment;
     private determineStage;
     determinePrompt(userId: string, es: EngagementScore): Promise<Prompt | null>;

@@ -36,7 +36,35 @@ export interface Prompt {
 export interface StageRule {
   name: string;
   stage: Stage;
-  matches: (score: number, daysSinceActive: number, createdDaysAgo: number, ahaReached: boolean, isPro: boolean) => boolean;
+  matches: (ctx: StageContext) => boolean;
+}
+
+export interface StageContext {
+  score: number;
+  daysSinceActive: number;
+  createdDaysAgo: number;
+  ahaReached: boolean;
+  isPro: boolean;
+}
+
+/** Configurable scoring weights. */
+export interface ScoreWeights {
+  /** Max score from recent sessions (default: 40). */
+  recentSessionsMax?: number;
+  /** Score per recent session (default: 6, capped at recentSessionsMax). */
+  recentSessionsPerSession?: number;
+  /** Bonus for reaching an aha moment (default: 20). */
+  ahaBonus?: number;
+  /** Bonus for being a pro/paying user (default: 20). */
+  proBonus?: number;
+  /** Bonus for activity today (default: 10). */
+  activeTodayBonus?: number;
+  /** Bonus for activity in last 2 days (default: 5). */
+  activeRecentBonus?: number;
+  /** Max score from total sessions (default: 10). */
+  totalSessionsMax?: number;
+  /** Sessions divisor for total sessions score (default: 3). */
+  totalSessionsDivisor?: number;
 }
 
 // ── Database Interface ──────────────────────────────────────────────────────
@@ -57,7 +85,12 @@ export interface LifecycleConfig {
   ahaMomentRules?: AhaMomentRule[];
   customStages?: StageRule[];
   promptBuilder?: (userId: string, es: EngagementScore) => Promise<Prompt | null>;
+  /** Days between prompts of the same type (default: 3). */
   promptCooldownDays?: number;
+  /** Max number of prompts of each type per 30-day window. Prevents prompt fatigue. */
+  maxPromptsPerType?: Record<PromptType, number>;
+  /** Custom scoring weights. */
+  scoreWeights?: ScoreWeights;
 }
 
 function toDate(d: Date | string): Date {
@@ -67,11 +100,25 @@ function toDate(d: Date | string): Date {
 // ── Service ─────────────────────────────────────────────────────────────────
 
 export class LifecycleService {
+  private weights: Required<ScoreWeights>;
+
   constructor(
     private cfg: LifecycleConfig,
     private db: LifecycleDB,
     private push: PushProvider
-  ) {}
+  ) {
+    const w = cfg.scoreWeights ?? {};
+    this.weights = {
+      recentSessionsMax: w.recentSessionsMax ?? 40,
+      recentSessionsPerSession: w.recentSessionsPerSession ?? 6,
+      ahaBonus: w.ahaBonus ?? 20,
+      proBonus: w.proBonus ?? 20,
+      activeTodayBonus: w.activeTodayBonus ?? 10,
+      activeRecentBonus: w.activeRecentBonus ?? 5,
+      totalSessionsMax: w.totalSessionsMax ?? 10,
+      totalSessionsDivisor: w.totalSessionsDivisor ?? 3,
+    };
+  }
 
   async evaluateUser(userId: string): Promise<EngagementScore> {
     const { createdAt, lastActiveAt } = await this.db.userCreatedAndLastActive(userId);
@@ -84,7 +131,7 @@ export class LifecycleService {
     const ahaReached = await this.checkAhaMoment(userId, now);
     const isPro = await this.db.isProUser(userId);
 
-    const score = calculateScore(recentSessions, ahaReached, isPro, daysSinceActive, totalSessions);
+    const score = this.calculateScore(recentSessions, ahaReached, isPro, daysSinceActive, totalSessions);
     const stage = this.determineStage(score, daysSinceActive, createdDaysAgo, ahaReached, isPro);
 
     const es: EngagementScore = {
@@ -102,6 +149,24 @@ export class LifecycleService {
     return es;
   }
 
+  calculateScore(
+    recentSessions: number,
+    ahaReached: boolean,
+    isPro: boolean,
+    daysSinceActive: number,
+    totalSessions: number
+  ): number {
+    const w = this.weights;
+    let score = 0;
+    score += Math.min(recentSessions * w.recentSessionsPerSession, w.recentSessionsMax);
+    if (ahaReached) score += w.ahaBonus;
+    if (isPro) score += w.proBonus;
+    if (daysSinceActive === 0) score += w.activeTodayBonus;
+    else if (daysSinceActive <= 2) score += w.activeRecentBonus;
+    score += Math.min(Math.floor(totalSessions / w.totalSessionsDivisor), w.totalSessionsMax);
+    return Math.min(score, 100);
+  }
+
   private async checkAhaMoment(userId: string, now: Date): Promise<boolean> {
     for (const rule of this.cfg.ahaMomentRules ?? []) {
       const since = new Date(now.getTime() - rule.windowDays * 24 * 60 * 60 * 1000);
@@ -112,8 +177,9 @@ export class LifecycleService {
   }
 
   private determineStage(score: number, daysSinceActive: number, createdDaysAgo: number, ahaReached: boolean, isPro: boolean): Stage {
+    const ctx: StageContext = { score, daysSinceActive, createdDaysAgo, ahaReached, isPro };
     for (const rule of this.cfg.customStages ?? []) {
-      if (rule.matches(score, daysSinceActive, createdDaysAgo, ahaReached, isPro)) return rule.stage;
+      if (rule.matches(ctx)) return rule.stage;
     }
 
     if (daysSinceActive >= 30) return "churned";
@@ -135,24 +201,43 @@ export class LifecycleService {
 
     if (this.cfg.promptBuilder) return this.cfg.promptBuilder(userId, es);
 
+    let candidate: Prompt | null = null;
     switch (es.stage) {
       case "engaged":
-        return es.is_pro
+        candidate = es.is_pro
           ? { type: "review", title: "Enjoying the app?", body: "Your feedback helps us improve. Leave a review?", reason: "engaged_pro_user" }
           : { type: "paywall", title: "Unlock Premium", body: "You're getting great value — upgrade to unlock everything.", reason: "engaged_free_user" };
+        break;
       case "loyal":
-        return { type: "milestone", title: "You're a power user!", body: "Thanks for being a loyal subscriber.", reason: "loyal_user" };
+        candidate = { type: "milestone", title: "You're a power user!", body: "Thanks for being a loyal subscriber.", reason: "loyal_user" };
+        break;
       case "activated":
-        return { type: "paywall", title: "Ready for more?", body: "You've discovered the core experience — unlock premium features.", reason: "aha_moment_reached" };
+        candidate = { type: "paywall", title: "Ready for more?", body: "You've discovered the core experience — unlock premium features.", reason: "aha_moment_reached" };
+        break;
       case "at_risk":
-        return { type: "winback", title: "We miss you!", body: "Come back and check out what's new.", reason: "at_risk" };
+        candidate = { type: "winback", title: "We miss you!", body: "Come back and check out what's new.", reason: "at_risk" };
+        break;
       case "dormant":
-        return { type: "winback", title: "It's been a while", body: "We've made improvements since your last visit.", reason: "dormant" };
+        candidate = { type: "winback", title: "It's been a while", body: "We've made improvements since your last visit.", reason: "dormant" };
+        break;
       case "churned":
-        return { type: "winback", title: "Welcome back", body: "A lot has changed — give us another try.", reason: "churned" };
+        candidate = { type: "winback", title: "Welcome back", body: "A lot has changed — give us another try.", reason: "churned" };
+        break;
       default:
         return null;
     }
+
+    if (!candidate) return null;
+
+    // Enforce max prompts per type (prevents prompt fatigue)
+    const maxPerType = this.cfg.maxPromptsPerType;
+    if (maxPerType && maxPerType[candidate.type] !== undefined) {
+      const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const count = await this.db.countPrompts(userId, candidate.type, since30d).catch(() => 0);
+      if (count >= maxPerType[candidate.type]) return null;
+    }
+
+    return candidate;
   }
 
   /** GET /api/v1/user/lifecycle */
@@ -201,15 +286,4 @@ export class LifecycleService {
       }
     }
   }
-}
-
-function calculateScore(recentSessions: number, ahaReached: boolean, isPro: boolean, daysSinceActive: number, totalSessions: number): number {
-  let score = 0;
-  score += recentSessions >= 7 ? 40 : recentSessions * 6;
-  if (ahaReached) score += 20;
-  if (isPro) score += 20;
-  if (daysSinceActive === 0) score += 10;
-  else if (daysSinceActive <= 2) score += 5;
-  score += totalSessions >= 30 ? 10 : Math.floor(totalSessions / 3);
-  return Math.min(score, 100);
 }

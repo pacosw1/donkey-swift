@@ -93,10 +93,16 @@ export declare class NotifyService {
     }, import("hono/utils/http-status").ContentfulStatusCode, "json">>;
 }
 export type TickFunc = (userId: string, prefs: NotificationPreferences, tokens: DeviceToken[], push: PushProvider) => Promise<void>;
+/** Checks whether a user has completed their daily goal. Used by stop_after_goal. */
+export type GoalCheckFunc = (userId: string) => Promise<boolean>;
 export interface NotifySchedulerConfig {
     intervalMs?: number;
     tickFunc: TickFunc;
     extraTick?: () => Promise<void>;
+    /** If set and user has stop_after_goal enabled, skip notification when goal is met. */
+    goalCheck?: GoalCheckFunc;
+    /** Max concurrent user evaluations per tick (default: 50). */
+    concurrency?: number;
 }
 export declare class NotifyScheduler {
     private db;
@@ -104,6 +110,8 @@ export declare class NotifyScheduler {
     private intervalMs;
     private tickFn;
     private extraTick?;
+    private goalCheck?;
+    private concurrency;
     private interval;
     constructor(db: NotifyDB, push: PushProvider, cfg: NotifySchedulerConfig);
     start(): void;
@@ -111,5 +119,11 @@ export declare class NotifyScheduler {
     private evaluate;
     private maybeNotify;
 }
-export declare function defaultTick(userId: string, _prefs: NotificationPreferences, tokens: DeviceToken[], push: PushProvider): Promise<void>;
+/** Get the current hour (0-23) in a timezone. Handles midnight correctly. */
+export declare function getHourInTimezone(date: Date, timezone: string): number;
+/**
+ * Example tick function. Replace with your app-specific notification logic.
+ * This exists as a reference — do not use in production without customizing the copy.
+ */
+export declare function exampleTick(userId: string, _prefs: NotificationPreferences, tokens: DeviceToken[], push: PushProvider): Promise<void>;
 //# sourceMappingURL=index.d.ts.map

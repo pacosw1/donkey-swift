@@ -105,7 +105,7 @@ export class ReceiptService {
     const currency = txn.currency || "USD";
     const priceCents = this.cfg.priceToCents
       ? this.cfg.priceToCents(txn.price, currency)
-      : Math.floor(txn.price / 10);
+      : Math.round(txn.price * 100);
 
     try {
       await this.db.upsertSubscription(userId, txn.productId, txn.originalTransactionId, status, expiresAt, priceCents, currency);
@@ -189,7 +189,7 @@ export class ReceiptService {
     const currency = txn.currency || "USD";
     const priceCents = this.cfg.priceToCents
       ? this.cfg.priceToCents(txn.price, currency)
-      : Math.floor(txn.price / 10);
+      : Math.round(txn.price * 100);
 
     await this.db.upsertSubscription(userId, txn.productId, txn.originalTransactionId, status, expiresAt, priceCents, currency)
       .catch((err) => console.log(`[receipt] webhook subscription update failed: ${err}`));
@@ -284,13 +284,35 @@ export class ReceiptService {
     switch (notifType) {
       case "SUBSCRIBED": return txn.offerType === 1 ? "trial" : "active";
       case "DID_RENEW": return "active";
-      case "EXPIRED":
-      case "REFUND":
-      case "REVOKE": return "expired";
+      case "EXPIRED": return "expired";
+      case "REFUND": return "refunded";
+      case "REVOKE": return "revoked";
       case "DID_CHANGE_RENEWAL_STATUS": return subtype === "AUTO_RENEW_DISABLED" ? "cancelled" : "active";
-      case "DID_FAIL_TO_RENEW": return subtype === "GRACE_PERIOD" ? "active" : "expired";
+      case "DID_FAIL_TO_RENEW": return subtype === "GRACE_PERIOD" ? "grace_period" : "billing_retry_failed";
+      case "GRACE_PERIOD_EXPIRED": return "expired";
       case "OFFER_REDEEMED": return "active";
+      case "PRICE_INCREASE": return subtype === "ACCEPTED" ? "active" : "price_increase_pending";
+      case "RENEWAL_EXTENDED": return "active";
+      case "REFUND_DECLINED": return "active";
+      case "REFUND_REVERSED": return "active";
       default: return this.transactionToStatus(txn);
     }
   }
 }
+
+// ── Subscription Status Constants ───────────────────────────────────────────
+
+export const SUBSCRIPTION_STATUSES = [
+  "active",
+  "expired",
+  "cancelled",
+  "trial",
+  "free",
+  "refunded",
+  "revoked",
+  "grace_period",
+  "billing_retry_failed",
+  "price_increase_pending",
+] as const;
+
+export type SubscriptionStatus = typeof SUBSCRIPTION_STATUSES[number];

@@ -75,4 +75,6 @@ export declare class ReceiptService {
     private transactionToStatus;
     private notificationToStatus;
 }
+export declare const SUBSCRIPTION_STATUSES: readonly ["active", "expired", "cancelled", "trial", "free", "refunded", "revoked", "grace_period", "billing_retry_failed", "price_increase_pending"];
+export type SubscriptionStatus = typeof SUBSCRIPTION_STATUSES[number];
 //# sourceMappingURL=index.d.ts.map

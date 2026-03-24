@@ -188,10 +188,17 @@ export type TickFunc = (
   push: PushProvider
 ) => Promise<void>;
 
+/** Checks whether a user has completed their daily goal. Used by stop_after_goal. */
+export type GoalCheckFunc = (userId: string) => Promise<boolean>;
+
 export interface NotifySchedulerConfig {
   intervalMs?: number;
   tickFunc: TickFunc;
   extraTick?: () => Promise<void>;
+  /** If set and user has stop_after_goal enabled, skip notification when goal is met. */
+  goalCheck?: GoalCheckFunc;
+  /** Max concurrent user evaluations per tick (default: 50). */
+  concurrency?: number;
 }
 
 export class NotifyScheduler {
@@ -200,6 +207,8 @@ export class NotifyScheduler {
   private intervalMs: number;
   private tickFn: TickFunc;
   private extraTick?: () => Promise<void>;
+  private goalCheck?: GoalCheckFunc;
+  private concurrency: number;
   private interval: ReturnType<typeof setInterval> | null = null;
 
   constructor(db: NotifyDB, push: PushProvider, cfg: NotifySchedulerConfig) {
@@ -208,18 +217,20 @@ export class NotifyScheduler {
     this.intervalMs = cfg.intervalMs ?? 15 * 60 * 1000;
     this.tickFn = cfg.tickFunc;
     this.extraTick = cfg.extraTick;
+    this.goalCheck = cfg.goalCheck;
+    this.concurrency = cfg.concurrency ?? 50;
   }
 
   start(): void {
     this.evaluate();
     this.interval = setInterval(() => this.evaluate(), this.intervalMs);
-    console.log(`[scheduler] started with interval ${this.intervalMs}ms`);
+    console.log(`[notify-scheduler] started with interval ${this.intervalMs}ms`);
   }
 
   stop(): void {
     if (this.interval) clearInterval(this.interval);
     this.interval = null;
-    console.log("[scheduler] stopped");
+    console.log("[notify-scheduler] stopped");
   }
 
   private async evaluate(): Promise<void> {
@@ -228,19 +239,21 @@ export class NotifyScheduler {
     try {
       userIds = await this.db.allUsersWithNotificationsEnabled();
     } catch (err) {
-      console.log(`[scheduler] error fetching users: ${err}`);
+      console.log(`[notify-scheduler] error fetching users: ${err}`);
       return;
     }
 
     if (!userIds.length) return;
-    console.log(`[scheduler] evaluating ${userIds.length} users`);
+    console.log(`[notify-scheduler] evaluating ${userIds.length} users`);
 
-    for (const uid of userIds) {
-      await this.maybeNotify(uid);
+    // Process in concurrent batches
+    for (let i = 0; i < userIds.length; i += this.concurrency) {
+      const batch = userIds.slice(i, i + this.concurrency);
+      await Promise.allSettled(batch.map((uid) => this.maybeNotify(uid)));
     }
 
     if (this.extraTick) await this.extraTick();
-    console.log(`[scheduler] tick complete in ${Date.now() - start}ms`);
+    console.log(`[notify-scheduler] tick complete in ${Date.now() - start}ms`);
   }
 
   private async maybeNotify(userId: string): Promise<void> {
@@ -249,10 +262,14 @@ export class NotifyScheduler {
 
     // Check waking hours using user's timezone
     const now = new Date();
-    const currentHour = parseInt(
-      new Intl.DateTimeFormat("en", { hour: "numeric", hour12: false, timeZone: prefs.timezone }).format(now), 10
-    );
+    const currentHour = getHourInTimezone(now, prefs.timezone);
     if (currentHour < prefs.wake_hour || currentHour >= prefs.sleep_hour) return;
+
+    // Check stop_after_goal
+    if (prefs.stop_after_goal && this.goalCheck) {
+      const goalMet = await this.goalCheck(userId).catch(() => false);
+      if (goalMet) return;
+    }
 
     // Check interval since last notification
     const last = await this.db.lastNotificationDelivery(userId).catch(() => null);
@@ -268,7 +285,26 @@ export class NotifyScheduler {
   }
 }
 
-export async function defaultTick(
+/** Get the current hour (0-23) in a timezone. Handles midnight correctly. */
+export function getHourInTimezone(date: Date, timezone: string): number {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      hour: "numeric",
+      hourCycle: "h23",
+      timeZone: timezone,
+    }).formatToParts(date);
+    const hourPart = parts.find((p) => p.type === "hour");
+    return hourPart ? parseInt(hourPart.value, 10) : date.getHours();
+  } catch {
+    return date.getHours(); // fallback to server timezone
+  }
+}
+
+/**
+ * Example tick function. Replace with your app-specific notification logic.
+ * This exists as a reference — do not use in production without customizing the copy.
+ */
+export async function exampleTick(
   userId: string,
   _prefs: NotificationPreferences,
   tokens: DeviceToken[],
@@ -276,9 +312,9 @@ export async function defaultTick(
 ): Promise<void> {
   for (const token of tokens) {
     try {
-      await push.send(token.token, "Hey!", "Don't forget to check in today.");
+      await push.send(token.token, "Reminder", "Don't forget to check in today.");
     } catch (err) {
-      console.log(`[scheduler] push failed for ${userId}: ${err}`);
+      console.log(`[notify-scheduler] push failed for ${userId}: ${err}`);
     }
   }
 }

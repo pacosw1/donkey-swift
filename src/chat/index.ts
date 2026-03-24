@@ -159,7 +159,7 @@ export class ChatService {
     }
 
     this.broadcastChatMessage(msg);
-    return c.json({ status: "sent" }, 201);
+    return c.json({ status: "sent", id: msg.id, created_at: msg.created_at }, 201);
   };
 
   /** GET /api/v1/chat/unread */

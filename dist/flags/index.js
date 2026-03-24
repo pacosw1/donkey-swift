@@ -12,8 +12,31 @@ function crc32(str) {
 // ── Service ─────────────────────────────────────────────────────────────────
 export class FlagsService {
     db;
-    constructor(db) {
+    cache = new Map();
+    cacheTtlMs;
+    constructor(db, cfg) {
         this.db = db;
+        this.cacheTtlMs = cfg?.cacheTtlMs ?? 0;
+    }
+    async getCachedFlag(key) {
+        if (this.cacheTtlMs > 0) {
+            const cached = this.cache.get(key);
+            if (cached && Date.now() < cached.expiresAt)
+                return cached.flag;
+        }
+        const flag = await this.db.getFlag(key).catch(() => null);
+        if (this.cacheTtlMs > 0) {
+            this.cache.set(key, { flag, expiresAt: Date.now() + this.cacheTtlMs });
+        }
+        return flag;
+    }
+    /** Invalidate the cache for a specific key (called after admin mutations). */
+    invalidate(key) {
+        this.cache.delete(key);
+    }
+    /** Clear the entire flag cache. */
+    clearCache() {
+        this.cache.clear();
     }
     /** Check if a flag is enabled for a user. Priority: override > rollout % > flag default. */
     async isEnabled(key, userId) {
@@ -22,7 +45,7 @@ export class FlagsService {
         if (override !== null)
             return override;
         // 2. Flag default
-        const flag = await this.db.getFlag(key).catch(() => null);
+        const flag = await this.getCachedFlag(key);
         if (!flag || !flag.enabled)
             return false;
         // 3. Rollout percentage
@@ -33,6 +56,26 @@ export class FlagsService {
         const hash = crc32(`${key}:${userId}`);
         return (hash % 100) < flag.rollout_pct;
     }
+    /** Get a flag's typed value for a user. Returns null if flag is disabled or user is not in rollout. */
+    async getValue(key, userId) {
+        const enabled = await this.isEnabled(key, userId);
+        if (!enabled)
+            return null;
+        const flag = await this.getCachedFlag(key);
+        if (!flag?.value)
+            return null;
+        switch (flag.value_type) {
+            case "number": return Number(flag.value);
+            case "json":
+                try {
+                    return JSON.parse(flag.value);
+                }
+                catch {
+                    return null;
+                }
+            default: return flag.value;
+        }
+    }
     /** GET /api/v1/flags/:key */
     handleCheck = async (c) => {
         const userId = c.get("userId");
@@ -40,7 +83,11 @@ export class FlagsService {
         if (!key)
             return c.json({ error: "flag key is required" }, 400);
         const enabled = await this.isEnabled(key, userId);
-        return c.json({ key, enabled });
+        const flag = await this.getCachedFlag(key);
+        const result = { key, enabled };
+        if (flag?.value && enabled)
+            result.value = flag.value;
+        return c.json(result);
     };
     /** POST /api/v1/flags/check */
     handleBatchCheck = async (c) => {
@@ -48,6 +95,28 @@ export class FlagsService {
         const body = await c.req.json();
         if (!body.keys?.length)
             return c.json({ error: "keys array is required" }, 400);
+        if (body.keys.length > 100)
+            return c.json({ error: "maximum 100 keys per batch" }, 400);
+        // Warm cache with bulk fetch if supported
+        if (this.db.getFlags && this.cacheTtlMs > 0) {
+            const uncached = body.keys.filter((k) => {
+                const entry = this.cache.get(k);
+                return !entry || Date.now() >= entry.expiresAt;
+            });
+            if (uncached.length > 0) {
+                const flags = await this.db.getFlags(uncached).catch(() => []);
+                const now = Date.now();
+                for (const flag of flags) {
+                    this.cache.set(flag.key, { flag, expiresAt: now + this.cacheTtlMs });
+                }
+                // Cache misses as null
+                for (const key of uncached) {
+                    if (!this.cache.has(key) || Date.now() >= this.cache.get(key).expiresAt) {
+                        this.cache.set(key, { flag: null, expiresAt: now + this.cacheTtlMs });
+                    }
+                }
+            }
+        }
         const result = {};
         for (const key of body.keys) {
             result[key] = await this.isEnabled(key, userId);
@@ -72,6 +141,8 @@ export class FlagsService {
             enabled: body.enabled ?? true,
             rollout_pct: body.rollout_pct ?? 100,
             description: body.description ?? "",
+            value: body.value ?? null,
+            value_type: body.value_type ?? "boolean",
             created_at: new Date(),
             updated_at: new Date(),
         };
@@ -81,6 +152,7 @@ export class FlagsService {
         catch {
             return c.json({ error: "failed to create flag" }, 500);
         }
+        this.invalidate(flag.key);
         return c.json(flag, 201);
     };
     /** PUT /admin/api/flags/:key */
@@ -101,6 +173,10 @@ export class FlagsService {
             existing.rollout_pct = body.rollout_pct;
         if (body.description !== undefined)
             existing.description = body.description;
+        if (body.value !== undefined)
+            existing.value = body.value;
+        if (body.value_type !== undefined)
+            existing.value_type = body.value_type;
         existing.updated_at = new Date();
         try {
             await this.db.upsertFlag(existing);
@@ -108,6 +184,7 @@ export class FlagsService {
         catch {
             return c.json({ error: "failed to update flag" }, 500);
         }
+        this.invalidate(key);
         return c.json(existing);
     };
     /** DELETE /admin/api/flags/:key */
@@ -115,13 +192,49 @@ export class FlagsService {
         const key = c.req.param("key");
         if (!key)
             return c.json({ error: "flag key is required" }, 400);
+        const existing = await this.db.getFlag(key);
+        if (!existing)
+            return c.json({ error: "flag not found" }, 404);
         try {
             await this.db.deleteFlag(key);
         }
         catch {
             return c.json({ error: "failed to delete flag" }, 500);
         }
+        this.invalidate(key);
         return c.json({ status: "deleted" });
+    };
+    /** POST /admin/api/flags/:key/overrides */
+    handleAdminSetOverride = async (c) => {
+        const key = c.req.param("key");
+        if (!key)
+            return c.json({ error: "flag key is required" }, 400);
+        const body = await c.req.json();
+        if (!body.user_id)
+            return c.json({ error: "user_id is required" }, 400);
+        if (body.enabled === undefined)
+            return c.json({ error: "enabled is required" }, 400);
+        try {
+            await this.db.setUserOverride(key, body.user_id, body.enabled);
+        }
+        catch {
+            return c.json({ error: "failed to set override" }, 500);
+        }
+        return c.json({ status: "override set" });
+    };
+    /** DELETE /admin/api/flags/:key/overrides/:user_id */
+    handleAdminDeleteOverride = async (c) => {
+        const key = c.req.param("key");
+        const userId = c.req.param("user_id");
+        if (!key || !userId)
+            return c.json({ error: "key and user_id are required" }, 400);
+        try {
+            await this.db.deleteUserOverride(key, userId);
+        }
+        catch {
+            return c.json({ error: "failed to delete override" }, 500);
+        }
+        return c.json({ status: "override deleted" });
     };
 }
 //# sourceMappingURL=index.js.map

@@ -6,10 +6,22 @@ export class LifecycleService {
     cfg;
     db;
     push;
+    weights;
     constructor(cfg, db, push) {
         this.cfg = cfg;
         this.db = db;
         this.push = push;
+        const w = cfg.scoreWeights ?? {};
+        this.weights = {
+            recentSessionsMax: w.recentSessionsMax ?? 40,
+            recentSessionsPerSession: w.recentSessionsPerSession ?? 6,
+            ahaBonus: w.ahaBonus ?? 20,
+            proBonus: w.proBonus ?? 20,
+            activeTodayBonus: w.activeTodayBonus ?? 10,
+            activeRecentBonus: w.activeRecentBonus ?? 5,
+            totalSessionsMax: w.totalSessionsMax ?? 10,
+            totalSessionsDivisor: w.totalSessionsDivisor ?? 3,
+        };
     }
     async evaluateUser(userId) {
         const { createdAt, lastActiveAt } = await this.db.userCreatedAndLastActive(userId);
@@ -20,7 +32,7 @@ export class LifecycleService {
         const recentSessions = await this.db.countRecentSessions(userId, new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000));
         const ahaReached = await this.checkAhaMoment(userId, now);
         const isPro = await this.db.isProUser(userId);
-        const score = calculateScore(recentSessions, ahaReached, isPro, daysSinceActive, totalSessions);
+        const score = this.calculateScore(recentSessions, ahaReached, isPro, daysSinceActive, totalSessions);
         const stage = this.determineStage(score, daysSinceActive, createdDaysAgo, ahaReached, isPro);
         const es = {
             user_id: userId,
@@ -35,6 +47,21 @@ export class LifecycleService {
         es.prompt = await this.determinePrompt(userId, es);
         return es;
     }
+    calculateScore(recentSessions, ahaReached, isPro, daysSinceActive, totalSessions) {
+        const w = this.weights;
+        let score = 0;
+        score += Math.min(recentSessions * w.recentSessionsPerSession, w.recentSessionsMax);
+        if (ahaReached)
+            score += w.ahaBonus;
+        if (isPro)
+            score += w.proBonus;
+        if (daysSinceActive === 0)
+            score += w.activeTodayBonus;
+        else if (daysSinceActive <= 2)
+            score += w.activeRecentBonus;
+        score += Math.min(Math.floor(totalSessions / w.totalSessionsDivisor), w.totalSessionsMax);
+        return Math.min(score, 100);
+    }
     async checkAhaMoment(userId, now) {
         for (const rule of this.cfg.ahaMomentRules ?? []) {
             const since = new Date(now.getTime() - rule.windowDays * 24 * 60 * 60 * 1000);
@@ -45,8 +72,9 @@ export class LifecycleService {
         return false;
     }
     determineStage(score, daysSinceActive, createdDaysAgo, ahaReached, isPro) {
+        const ctx = { score, daysSinceActive, createdDaysAgo, ahaReached, isPro };
         for (const rule of this.cfg.customStages ?? []) {
-            if (rule.matches(score, daysSinceActive, createdDaysAgo, ahaReached, isPro))
+            if (rule.matches(ctx))
                 return rule.stage;
         }
         if (daysSinceActive >= 30)
@@ -73,24 +101,42 @@ export class LifecycleService {
         }
         if (this.cfg.promptBuilder)
             return this.cfg.promptBuilder(userId, es);
+        let candidate = null;
         switch (es.stage) {
             case "engaged":
-                return es.is_pro
+                candidate = es.is_pro
                     ? { type: "review", title: "Enjoying the app?", body: "Your feedback helps us improve. Leave a review?", reason: "engaged_pro_user" }
                     : { type: "paywall", title: "Unlock Premium", body: "You're getting great value — upgrade to unlock everything.", reason: "engaged_free_user" };
+                break;
             case "loyal":
-                return { type: "milestone", title: "You're a power user!", body: "Thanks for being a loyal subscriber.", reason: "loyal_user" };
+                candidate = { type: "milestone", title: "You're a power user!", body: "Thanks for being a loyal subscriber.", reason: "loyal_user" };
+                break;
             case "activated":
-                return { type: "paywall", title: "Ready for more?", body: "You've discovered the core experience — unlock premium features.", reason: "aha_moment_reached" };
+                candidate = { type: "paywall", title: "Ready for more?", body: "You've discovered the core experience — unlock premium features.", reason: "aha_moment_reached" };
+                break;
             case "at_risk":
-                return { type: "winback", title: "We miss you!", body: "Come back and check out what's new.", reason: "at_risk" };
+                candidate = { type: "winback", title: "We miss you!", body: "Come back and check out what's new.", reason: "at_risk" };
+                break;
             case "dormant":
-                return { type: "winback", title: "It's been a while", body: "We've made improvements since your last visit.", reason: "dormant" };
+                candidate = { type: "winback", title: "It's been a while", body: "We've made improvements since your last visit.", reason: "dormant" };
+                break;
             case "churned":
-                return { type: "winback", title: "Welcome back", body: "A lot has changed — give us another try.", reason: "churned" };
+                candidate = { type: "winback", title: "Welcome back", body: "A lot has changed — give us another try.", reason: "churned" };
+                break;
             default:
                 return null;
         }
+        if (!candidate)
+            return null;
+        // Enforce max prompts per type (prevents prompt fatigue)
+        const maxPerType = this.cfg.maxPromptsPerType;
+        if (maxPerType && maxPerType[candidate.type] !== undefined) {
+            const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+            const count = await this.db.countPrompts(userId, candidate.type, since30d).catch(() => 0);
+            if (count >= maxPerType[candidate.type])
+                return null;
+        }
+        return candidate;
     }
     /** GET /api/v1/user/lifecycle */
     handleGetLifecycle = async (c) => {
@@ -139,19 +185,5 @@ export class LifecycleService {
             }
         }
     }
-}
-function calculateScore(recentSessions, ahaReached, isPro, daysSinceActive, totalSessions) {
-    let score = 0;
-    score += recentSessions >= 7 ? 40 : recentSessions * 6;
-    if (ahaReached)
-        score += 20;
-    if (isPro)
-        score += 20;
-    if (daysSinceActive === 0)
-        score += 10;
-    else if (daysSinceActive <= 2)
-        score += 5;
-    score += totalSessions >= 30 ? 10 : Math.floor(totalSessions / 3);
-    return Math.min(score, 100);
 }
 //# sourceMappingURL=index.js.map

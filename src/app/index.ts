@@ -125,8 +125,12 @@ export function createApp(cfg: AppConfig): AppResources {
 
   // ── Auth ──
   app.post(`${api}/auth/apple`, rateLimit(authRl), cfg.auth.handleAppleAuth);
+  app.post(`${api}/auth/apple/web`, rateLimit(authRl), cfg.auth.handleWebAuth);
   app.get(`${api}/auth/me`, auth, cfg.auth.handleMe);
   app.post(`${api}/auth/logout`, auth, rateLimit(writeRl), cfg.auth.handleLogout);
+  app.post(`${api}/auth/logout-all`, auth, rateLimit(sensitiveRl), cfg.auth.handleLogoutAll);
+  app.get(`${api}/auth/sessions`, auth, cfg.auth.handleListSessions);
+  app.delete(`${api}/auth/sessions/:jti`, auth, rateLimit(writeRl), cfg.auth.handleRevokeSession);
 
   // ── Engage ──
   if (cfg.engage) {
@@ -177,6 +181,8 @@ export function createApp(cfg: AppConfig): AppResources {
     app.post(`${adm}/flags`, admin, rateLimit(adminRl), f.handleAdminCreate);
     app.put(`${adm}/flags/:key`, admin, rateLimit(adminRl), f.handleAdminUpdate);
     app.delete(`${adm}/flags/:key`, admin, rateLimit(adminRl), f.handleAdminDelete);
+    app.post(`${adm}/flags/:key/overrides`, admin, rateLimit(adminRl), f.handleAdminSetOverride);
+    app.delete(`${adm}/flags/:key/overrides/:user_id`, admin, rateLimit(adminRl), f.handleAdminDeleteOverride);
   }
 
   // ── Receipts ──
@@ -222,6 +228,8 @@ export function createApp(cfg: AppConfig): AppResources {
     app.get(`${adm}/analytics/events`, admin, an.handleEvents);
     app.get(`${adm}/analytics/mrr`, admin, an.handleMRR);
     app.get(`${adm}/analytics/summary`, admin, an.handleSummary);
+    app.get(`${adm}/analytics/retention`, admin, an.handleRetention);
+    app.get(`${adm}/analytics/revenue`, admin, an.handleRevenue);
   }
 
   // ── Logs ──

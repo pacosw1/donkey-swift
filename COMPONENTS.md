@@ -195,14 +195,26 @@ function funcTask(name: string, fn: (signal: AbortSignal) => Promise<void>): Tas
 
 ## auth
 
-Apple Sign-In verification and JWT session management.
+Apple Sign-In verification, JWT session management, optional server-side session store for revocation and multi-device management.
 
-### DB Interface
+### DB Interfaces
 
 ```typescript
 interface AuthDB {
   upsertUserByAppleSub(id: string, appleSub: string, email: string, name: string): Promise<User>;
   userById(id: string): Promise<User>;
+}
+
+/**
+ * Optional server-side session store. Enables session revocation and multi-device management.
+ * If not provided, sessions are stateless JWTs (no revocation support).
+ */
+interface SessionDB {
+  createSession(userId: string, jti: string, expiresAt: Date): Promise<void>;
+  isSessionValid(jti: string): Promise<boolean>;
+  revokeSession(jti: string): Promise<void>;
+  revokeAllSessions(userId: string): Promise<void>;
+  activeSessions?(userId: string): Promise<Array<{ jti: string; createdAt: Date | string }>>;
 }
 ```
 
@@ -222,9 +234,12 @@ interface AuthConfig {
   jwtSecret: string;
   appleBundleId: string;
   appleWebClientId?: string;
-  sessionExpirySec?: number;   // default: 7 days
+  sessionExpirySec?: number;       // default: 7 days
   productionEnv?: boolean;
-  cookieName?: string;         // default: "session"
+  cookieName?: string;             // default: "session"
+  sessionDB?: SessionDB;           // optional server-side session store
+  appleClientSecret?: string;      // JWT for Sign in with Apple web flow
+  appleRedirectUri?: string;       // redirect URI for Apple web flow
 }
 ```
 
@@ -233,12 +248,16 @@ interface AuthConfig {
 ```typescript
 class AuthService {
   constructor(cfg: AuthConfig, db: AuthDB)
-  async verifyAppleIdToken(tokenString: string): Promise<{ sub: string; email: string }>
+  async verifyAppleIdToken(tokenString: string): Promise<{ sub: string; email: string; emailVerified: boolean }>
   async createSessionToken(userId: string): Promise<string>
   async parseSessionToken(tokenStr: string): Promise<string>
-  handleAppleAuth: (c: Context) => Promise<Response>   // POST /api/v1/auth/apple
-  handleMe: (c: Context) => Promise<Response>           // GET  /api/v1/auth/me
-  handleLogout: (c: Context) => Promise<Response>       // POST /api/v1/auth/logout
+  handleAppleAuth: (c: Context) => Promise<Response>       // POST   /api/v1/auth/apple
+  handleWebAuth: (c: Context) => Promise<Response>         // POST   /api/v1/auth/apple/web
+  handleMe: (c: Context) => Promise<Response>              // GET    /api/v1/auth/me
+  handleLogout: (c: Context) => Promise<Response>          // POST   /api/v1/auth/logout
+  handleLogoutAll: (c: Context) => Promise<Response>       // POST   /api/v1/auth/logout-all
+  handleListSessions: (c: Context) => Promise<Response>    // GET    /api/v1/auth/sessions
+  handleRevokeSession: (c: Context) => Promise<Response>   // DELETE /api/v1/auth/sessions/:jti
 }
 ```
 
@@ -325,7 +344,7 @@ function defaultPaywallTrigger(data: EngagementData): string
 
 ## notify
 
-Push notification device registration, preferences, delivery scheduling.
+Push notification device registration, preferences, delivery scheduling with concurrent processing and goal-based suppression.
 
 ### DB Interface
 
@@ -381,10 +400,15 @@ interface NotificationDelivery {
 
 type TickFunc = (userId: string, prefs: NotificationPreferences, tokens: DeviceToken[], push: PushProvider) => Promise<void>;
 
+/** Checks whether a user has completed their daily goal. Used by stop_after_goal. */
+type GoalCheckFunc = (userId: string) => Promise<boolean>;
+
 interface NotifySchedulerConfig {
   intervalMs?: number;
-  tickFunc: TickFunc;   // required — use defaultTick() for standard behavior
+  tickFunc: TickFunc;        // required — use exampleTick() as a reference
   extraTick?: () => Promise<void>;
+  goalCheck?: GoalCheckFunc; // skip notification when goal is met (if stop_after_goal enabled)
+  concurrency?: number;      // max concurrent user evaluations per tick (default: 50)
 }
 ```
 
@@ -410,30 +434,92 @@ class NotifyScheduler {
 ### Functions
 
 ```typescript
-function defaultTick(userId: string, prefs: NotificationPreferences, tokens: DeviceToken[], push: PushProvider): Promise<void>
+function exampleTick(userId: string, prefs: NotificationPreferences, tokens: DeviceToken[], push: PushProvider): Promise<void>
+function getHourInTimezone(date: Date, timezone: string): number
 ```
 
 ---
 
 ## push
 
-Apple Push Notification service (APNs) provider with JWT-based authentication.
+Apple Push Notification service (APNs) provider with JWT-based authentication, HTTP/2 transport, rich payload support, and bad token detection.
 
 ### Types
 
 ```typescript
+/** Result of a push send attempt. */
+interface PushResult {
+  success: boolean;
+  reason?: string;       // APNs error reason (e.g. "BadDeviceToken", "Unregistered")
+  statusCode?: number;
+}
+
+/** Callback invoked when a device token is invalid. Use to disable the token in your DB. */
+type BadTokenHandler = (deviceToken: string, reason: string) => void;
+
 interface PushProvider {
   send(deviceToken: string, title: string, body: string): Promise<void>;
   sendWithData(deviceToken: string, title: string, body: string, data: Record<string, string>): Promise<void>;
   sendSilent(deviceToken: string, data: Record<string, string>): Promise<void>;
+  sendRich?(deviceToken: string, payload: APNsPayload): Promise<PushResult>;
+}
+
+interface APNsAlert {
+  title: string;
+  subtitle?: string;
+  body: string;
+  "title-loc-key"?: string;
+  "title-loc-args"?: string[];
+  "loc-key"?: string;
+  "loc-args"?: string[];
+  "launch-image"?: string;
+}
+
+interface APNsSound {
+  name?: string;       // default: "default"
+  critical?: 0 | 1;
+  volume?: number;
+}
+
+interface APNsAps {
+  alert?: APNsAlert | string;
+  badge?: number;
+  sound?: string | APNsSound;
+  "content-available"?: number;
+  "mutable-content"?: number;
+  category?: string;
+  "thread-id"?: string;
+  "target-content-id"?: string;
+  "interruption-level"?: "passive" | "active" | "time-sensitive" | "critical";
+  "relevance-score"?: number;
+  "filter-criteria"?: string;
+  "stale-date"?: number;
+  timestamp?: number;                       // Live Activities
+  event?: string;                           // Live Activities (update, end)
+  "content-state"?: Record<string, unknown>; // Live Activities
+  "dismissal-date"?: number;                // Live Activities
+}
+
+interface APNsPayload {
+  aps: APNsAps;
+  [key: string]: unknown;  // custom data merged into top-level payload
+}
+
+interface APNsHeaders {
+  pushType?: string;       // alert, background, voip, liveactivity, etc.
+  priority?: string;       // "10" immediate, "5" power-saving, "1" background
+  expiration?: string;     // 0 = deliver now or not at all
+  collapseId?: string;     // coalescing notifications
+  topic?: string;          // override APNs topic
 }
 
 interface PushConfig {
-  keyPath?: string;     // path to .p8 key file
+  keyPath?: string;                          // path to .p8 key file
   keyId: string;
   teamId: string;
-  topic: string;        // bundle ID
+  topic: string;                             // bundle ID
   environment?: "sandbox" | "production";
+  onBadToken?: BadTokenHandler;              // called when APNs reports bad token
 }
 ```
 
@@ -446,16 +532,30 @@ class APNsProvider implements PushProvider {
   async send(deviceToken: string, title: string, body: string): Promise<void>
   async sendWithData(deviceToken: string, title: string, body: string, data: Record<string, string>): Promise<void>
   async sendSilent(deviceToken: string, data: Record<string, string>): Promise<void>
+  async sendRich(deviceToken: string, payload: APNsPayload, headers?: APNsHeaders): Promise<PushResult>
 }
 
-class LogProvider implements PushProvider { /* logs to console */ }
-class NoopProvider implements PushProvider { /* no-op */ }
+class LogProvider implements PushProvider { /* logs to console, sendRich returns { success: true } */ }
+class NoopProvider implements PushProvider { /* no-op, sendRich returns { success: true } */ }
 ```
 
 ### Functions
 
 ```typescript
 async function newProvider(cfg: PushConfig): Promise<PushProvider>
+function alertPayload(opts: {
+  title: string; body: string; subtitle?: string; badge?: number; sound?: string;
+  category?: string; threadId?: string;
+  interruptionLevel?: "passive" | "active" | "time-sensitive" | "critical";
+  relevanceScore?: number; mutableContent?: boolean; data?: Record<string, string>;
+}): APNsPayload
+function criticalAlertPayload(opts: {
+  title: string; body: string; soundName?: string; volume?: number; data?: Record<string, string>;
+}): APNsPayload
+function liveActivityPayload(opts: {
+  event: "update" | "end"; contentState: Record<string, unknown>; timestamp: number;
+  dismissalDate?: number; alert?: { title: string; body: string }; sound?: string;
+}): APNsPayload
 ```
 
 ---
@@ -468,7 +568,7 @@ In-app support chat with WebSocket real-time delivery and push fallback.
 
 ```typescript
 interface ChatDB {
-  /** Returns messages ordered by created_at ASC (oldest first). */
+  /** Returns messages ordered by created_at DESC (newest first). */
   getChatMessages(userId: string, limit: number, offset: number): Promise<ChatMessage[]>;
   getChatMessagesSince(userId: string, sinceId: number): Promise<ChatMessage[]>;
   sendChatMessage(userId: string, sender: string, message: string, messageType: string): Promise<ChatMessage>;
@@ -537,7 +637,7 @@ class ChatService {
 
 ## email
 
-Email sending with SMTP transport and template rendering.
+Email sending interface with template rendering. Interface-only — implement your own provider (e.g. SMTP via nodemailer, SES, Resend).
 
 ### Types
 
@@ -565,11 +665,6 @@ interface EmailTemplate {
 ### Service
 
 ```typescript
-class SMTPProvider implements EmailProvider {
-  constructor(cfg: SMTPConfig)
-  async send(to: string, subject: string, textBody: string, htmlBody?: string): Promise<void>
-}
-
 class LogProvider implements EmailProvider { /* logs to console */ }
 class NoopProvider implements EmailProvider { /* no-op */ }
 
@@ -577,12 +672,6 @@ class Renderer {
   register(name: string, template: EmailTemplate): void
   render(name: string, data: Record<string, string>): { subject: string; html: string; text: string }
 }
-```
-
-### Functions
-
-```typescript
-function newProvider(cfg: Partial<SMTPConfig>): EmailProvider
 ```
 
 ---
@@ -675,11 +764,17 @@ class SyncService {
 
 ## storage
 
-S3-compatible object storage client.
+Object storage interface. Interface-only — implement with S3, R2, GCS, or any provider.
 
 ### Types
 
 ```typescript
+interface StorageProvider {
+  configured(): boolean;
+  put(key: string, contentType: string, data: Buffer | Uint8Array): Promise<void>;
+  get(key: string): Promise<{ data: Uint8Array; contentType: string }>;
+}
+
 interface StorageConfig {
   region?: string;
   bucket: string;
@@ -692,11 +787,10 @@ interface StorageConfig {
 ### Service
 
 ```typescript
-class StorageClient {
-  constructor(cfg: StorageConfig)
-  configured(): boolean
-  async put(key: string, contentType: string, data: Buffer | Uint8Array): Promise<void>
-  async get(key: string): Promise<{ data: Uint8Array; contentType: string }>
+class NoopStorageProvider implements StorageProvider {
+  configured(): boolean   // returns false
+  put(): Promise<void>    // throws "storage not configured"
+  get(): Promise<...>     // throws "storage not configured"
 }
 ```
 
@@ -763,6 +857,10 @@ interface ReceiptConfig {
   environment?: string;
   priceToCents?: (priceMilliunits: number, currency: string) => number;
 }
+
+/** All possible subscription status strings. */
+const SUBSCRIPTION_STATUSES: readonly ["active", "expired", "cancelled", "trial", "free", "refunded", "revoked", "grace_period", "billing_retry_failed", "price_increase_pending"]
+type SubscriptionStatus = typeof SUBSCRIPTION_STATUSES[number]
 ```
 
 ### Service
@@ -772,6 +870,114 @@ class ReceiptService {
   constructor(db: ReceiptDB, cfg: ReceiptConfig)
   handleVerifyReceipt: (c: Context) => Promise<Response>   // POST /api/v1/receipt/verify
   handleWebhook: (c: Context) => Promise<Response>         // POST /api/v1/receipt/webhook
+}
+```
+
+### Webhook Notification Types Handled
+
+`SUBSCRIBED`, `DID_RENEW`, `EXPIRED`, `REFUND`, `REVOKE`, `DID_CHANGE_RENEWAL_STATUS`, `DID_FAIL_TO_RENEW`, `GRACE_PERIOD_EXPIRED`, `OFFER_REDEEMED`, `PRICE_INCREASE`, `RENEWAL_EXTENDED`, `REFUND_DECLINED`, `REFUND_REVERSED`, `TEST`
+
+---
+
+## appstore
+
+App Store Server API v2 client for server-to-server operations (transaction history, subscription management, notification replay).
+
+### Types
+
+```typescript
+interface AppStoreConfig {
+  privateKey: string;                          // path to .p8 file or PEM string
+  keyId: string;                               // from App Store Connect
+  issuerId: string;                            // your team's UUID
+  bundleId: string;
+  environment?: "sandbox" | "production";      // default: "production"
+}
+
+interface TransactionHistoryResponse {
+  signedTransactions: string[];
+  revision: string;
+  hasMore: boolean;
+  bundleId: string;
+  environment: string;
+}
+
+interface SubscriptionStatusResponse {
+  data: SubscriptionGroupStatus[];
+  bundleId: string;
+  environment: string;
+}
+
+interface SubscriptionGroupStatus {
+  subscriptionGroupIdentifier: string;
+  lastTransactions: LastTransaction[];
+}
+
+interface LastTransaction {
+  originalTransactionId: string;
+  status: number;
+  signedTransactionInfo: string;
+  signedRenewalInfo: string;
+}
+
+interface NotificationHistoryResponse {
+  notificationHistory: NotificationHistoryEntry[];
+  hasMore: boolean;
+  paginationToken?: string;
+}
+
+interface NotificationHistoryEntry {
+  signedPayload: string;
+  sendAttempts: SendAttempt[];
+}
+
+interface SendAttempt {
+  attemptDate: number;
+  sendAttemptResult: string;
+}
+
+interface OrderLookupResponse {
+  status: number;
+  signedTransactions: string[];
+}
+
+interface ExtendSubscriptionResponse {
+  requestIdentifier: string;
+}
+
+interface MassExtendResponse {
+  requestIdentifier: string;
+}
+
+/** StoreKit 2 subscription status codes. */
+const SUBSCRIPTION_STATUS_CODES: { 1: "active"; 2: "expired"; 3: "billing_retry"; 4: "grace_period"; 5: "revoked" }
+```
+
+### Service
+
+```typescript
+class AppStoreServerClient {
+  constructor(cfg: AppStoreConfig)
+  async getTransactionHistory(transactionId: string, opts?: {
+    revision?: string; sort?: "ASCENDING" | "DESCENDING"; productTypes?: string[];
+  }): Promise<TransactionHistoryResponse>
+  async getAllTransactionHistory(transactionId: string, opts?: {
+    sort?: "ASCENDING" | "DESCENDING"; productTypes?: string[];
+  }): Promise<string[]>
+  async getSubscriptionStatuses(transactionId: string): Promise<SubscriptionStatusResponse>
+  async extendSubscription(originalTransactionId: string, extendByDays: number, extendReasonCode: 0 | 1 | 2 | 3, requestIdentifier: string): Promise<ExtendSubscriptionResponse>
+  async massExtendSubscriptions(productId: string, extendByDays: number, extendReasonCode: 0 | 1 | 2 | 3, requestIdentifier: string): Promise<MassExtendResponse>
+  async getNotificationHistory(startDate: Date, endDate: Date, opts?: {
+    paginationToken?: string; notificationType?: string; notificationSubtype?: string;
+  }): Promise<NotificationHistoryResponse>
+  async lookupOrder(orderId: string): Promise<OrderLookupResponse>
+  async requestTestNotification(): Promise<{ testNotificationToken: string }>
+  async getTestNotificationStatus(testNotificationToken: string): Promise<{ signedPayload: string; sendAttempts: SendAttempt[] }>
+}
+
+class AppStoreError extends Error {
+  readonly statusCode: number;
+  readonly body: string;
 }
 ```
 
@@ -935,7 +1141,7 @@ class AccountService {
 
 ## flags
 
-Feature flags with percentage rollout and per-user overrides.
+Feature flags with percentage rollout, per-user overrides, typed values, and optional in-memory cache.
 
 ### DB Interface
 
@@ -948,6 +1154,8 @@ interface FlagsDB {
   getUserOverride(key: string, userId: string): Promise<boolean | null>;
   setUserOverride(key: string, userId: string, enabled: boolean): Promise<void>;
   deleteUserOverride(key: string, userId: string): Promise<void>;
+  /** Optional: fetch multiple flags in one query. Falls back to sequential getFlag if not provided. */
+  getFlags?(keys: string[]): Promise<Flag[]>;
 }
 ```
 
@@ -959,8 +1167,14 @@ interface Flag {
   enabled: boolean;
   rollout_pct: number;
   description: string;
+  value?: string | null;                                        // typed value (string, number, or JSON)
+  value_type?: "boolean" | "string" | "number" | "json";
   created_at: Date;
   updated_at: Date;
+}
+
+interface FlagsConfig {
+  cacheTtlMs?: number;  // in-memory cache TTL in ms (default: 0 = no cache)
 }
 ```
 
@@ -968,14 +1182,19 @@ interface Flag {
 
 ```typescript
 class FlagsService {
-  constructor(db: FlagsDB)
+  constructor(db: FlagsDB, cfg?: FlagsConfig)
   async isEnabled(key: string, userId: string): Promise<boolean>
-  handleCheck: (c: Context) => Promise<Response>          // GET  /api/v1/flags/:key
-  handleBatchCheck: (c: Context) => Promise<Response>     // POST /api/v1/flags/check
-  handleAdminList: (c: Context) => Promise<Response>      // GET  /admin/api/flags
-  handleAdminCreate: (c: Context) => Promise<Response>    // POST /admin/api/flags
-  handleAdminUpdate: (c: Context) => Promise<Response>    // PUT  /admin/api/flags/:key
-  handleAdminDelete: (c: Context) => Promise<Response>    // DELETE /admin/api/flags/:key
+  async getValue(key: string, userId: string): Promise<string | number | Record<string, unknown> | null>
+  invalidate(key: string): void
+  clearCache(): void
+  handleCheck: (c: Context) => Promise<Response>                  // GET    /api/v1/flags/:key
+  handleBatchCheck: (c: Context) => Promise<Response>             // POST   /api/v1/flags/check
+  handleAdminList: (c: Context) => Promise<Response>              // GET    /admin/api/flags
+  handleAdminCreate: (c: Context) => Promise<Response>            // POST   /admin/api/flags
+  handleAdminUpdate: (c: Context) => Promise<Response>            // PUT    /admin/api/flags/:key
+  handleAdminDelete: (c: Context) => Promise<Response>            // DELETE /admin/api/flags/:key (returns 404 for missing)
+  handleAdminSetOverride: (c: Context) => Promise<Response>       // POST   /admin/api/flags/:key/overrides
+  handleAdminDeleteOverride: (c: Context) => Promise<Response>    // DELETE /admin/api/flags/:key/overrides/:user_id
 }
 ```
 
@@ -983,7 +1202,7 @@ class FlagsService {
 
 ## lifecycle
 
-User lifecycle stage classification, engagement scoring, and contextual prompts.
+User lifecycle stage classification, engagement scoring with configurable weights, and contextual prompts with fatigue prevention.
 
 ### DB Interface
 
@@ -1034,17 +1253,38 @@ interface Prompt {
   reason: string;
 }
 
+interface StageContext {
+  score: number;
+  daysSinceActive: number;
+  createdDaysAgo: number;
+  ahaReached: boolean;
+  isPro: boolean;
+}
+
 interface StageRule {
   name: string;
   stage: Stage;
-  matches: (score: number, daysSinceActive: number, createdDaysAgo: number, ahaReached: boolean, isPro: boolean) => boolean;
+  matches: (ctx: StageContext) => boolean;
+}
+
+interface ScoreWeights {
+  recentSessionsMax?: number;          // default: 40
+  recentSessionsPerSession?: number;   // default: 6
+  ahaBonus?: number;                   // default: 20
+  proBonus?: number;                   // default: 20
+  activeTodayBonus?: number;           // default: 10
+  activeRecentBonus?: number;          // default: 5
+  totalSessionsMax?: number;           // default: 10
+  totalSessionsDivisor?: number;       // default: 3
 }
 
 interface LifecycleConfig {
   ahaMomentRules?: AhaMomentRule[];
   customStages?: StageRule[];
   promptBuilder?: (userId: string, es: EngagementScore) => Promise<Prompt | null>;
-  promptCooldownDays?: number;
+  promptCooldownDays?: number;                    // default: 3
+  maxPromptsPerType?: Record<PromptType, number>; // per 30-day window
+  scoreWeights?: ScoreWeights;
 }
 ```
 
@@ -1054,6 +1294,7 @@ interface LifecycleConfig {
 class LifecycleService {
   constructor(cfg: LifecycleConfig, db: LifecycleDB, push: PushProvider)
   async evaluateUser(userId: string): Promise<EngagementScore>
+  calculateScore(recentSessions: number, ahaReached: boolean, isPro: boolean, daysSinceActive: number, totalSessions: number): number
   async evaluateNotifications(userIds: string[]): Promise<void>
   handleGetLifecycle: (c: Context) => Promise<Response>   // GET  /api/v1/user/lifecycle
   handleAckPrompt: (c: Context) => Promise<Response>      // POST /api/v1/user/lifecycle/ack
@@ -1064,7 +1305,7 @@ class LifecycleService {
 
 ## analytics
 
-Admin analytics dashboards (DAU, events, MRR, summary).
+Admin analytics dashboards (DAU, events, MRR, summary, retention, revenue).
 
 ### DB Interface
 
@@ -1079,6 +1320,10 @@ interface AnalyticsDB {
   mau(): Promise<number>;
   totalUsers(): Promise<number>;
   activeSubscriptions(): Promise<number>;
+  mrrCents?(): Promise<number>;
+  revenueSeries?(since: Date | string): Promise<RevenueRow[]>;
+  retentionCohort?(cohortSince: Date | string, days: number[]): Promise<RetentionRow[]>;
+  trialConversionRate?(since: Date | string): Promise<number>;
 }
 ```
 
@@ -1088,6 +1333,8 @@ interface AnalyticsDB {
 interface DAURow { date: string; dau: number; }
 interface EventRow { date: string; event: string; count: number; unique_users: number; }
 interface SubStats { status: string; count: number; }
+interface RevenueRow { date: string; revenue_cents: number; }
+interface RetentionRow { cohort_date: string; day: number; retained_pct: number; users: number; }
 ```
 
 ### Service
@@ -1095,10 +1342,12 @@ interface SubStats { status: string; count: number; }
 ```typescript
 class AnalyticsService {
   constructor(db: AnalyticsDB)
-  handleDAU: (c: Context) => Promise<Response>       // GET /admin/api/analytics/dau
-  handleEvents: (c: Context) => Promise<Response>    // GET /admin/api/analytics/events
-  handleMRR: (c: Context) => Promise<Response>       // GET /admin/api/analytics/mrr
-  handleSummary: (c: Context) => Promise<Response>   // GET /admin/api/analytics/summary
+  handleDAU: (c: Context) => Promise<Response>         // GET /admin/api/analytics/dau
+  handleEvents: (c: Context) => Promise<Response>      // GET /admin/api/analytics/events
+  handleMRR: (c: Context) => Promise<Response>         // GET /admin/api/analytics/mrr (includes mrr_cents when available)
+  handleSummary: (c: Context) => Promise<Response>     // GET /admin/api/analytics/summary (includes trial_conversion_rate when available)
+  handleRetention: (c: Context) => Promise<Response>   // GET /admin/api/analytics/retention
+  handleRevenue: (c: Context) => Promise<Response>     // GET /admin/api/analytics/revenue
 }
 ```
 
@@ -1151,3 +1400,32 @@ interface AppResources {
 function createApp(cfg: AppConfig): AppResources
 function openApiSpec(): Record<string, unknown>
 ```
+
+### Routes Wired
+
+**Auth** (always mounted):
+- `POST /api/v1/auth/apple` — mobile Sign in with Apple
+- `POST /api/v1/auth/apple/web` — web Sign in with Apple (OAuth2 code exchange)
+- `GET /api/v1/auth/me`
+- `POST /api/v1/auth/logout`
+- `POST /api/v1/auth/logout-all` — revoke all sessions
+- `GET /api/v1/auth/sessions` — list active sessions
+- `DELETE /api/v1/auth/sessions/:jti` — revoke specific session
+
+**Flags** (when `flags` provided):
+- `GET /api/v1/flags/:key`
+- `POST /api/v1/flags/check`
+- `GET /admin/api/flags`
+- `POST /admin/api/flags`
+- `PUT /admin/api/flags/:key`
+- `DELETE /admin/api/flags/:key`
+- `POST /admin/api/flags/:key/overrides`
+- `DELETE /admin/api/flags/:key/overrides/:user_id`
+
+**Analytics** (when `analytics` provided):
+- `GET /admin/api/analytics/dau`
+- `GET /admin/api/analytics/events`
+- `GET /admin/api/analytics/mrr`
+- `GET /admin/api/analytics/summary`
+- `GET /admin/api/analytics/retention`
+- `GET /admin/api/analytics/revenue`
