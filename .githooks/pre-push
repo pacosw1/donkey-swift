@@ -1,6 +1,6 @@
 #!/bin/sh
 echo "🔍 Running type-check..."
-cd packages/donkey-swift && npx tsc --noEmit || { echo "❌ Type-check failed"; exit 1; }
+npx tsc --noEmit || { echo "❌ Type-check failed"; exit 1; }
 
 echo "🧪 Running tests..."
 npx vitest run || { echo "❌ Tests failed"; exit 1; }
