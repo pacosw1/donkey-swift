@@ -16,6 +16,8 @@ export class AttestService {
     };
     /** POST /api/v1/attest/verify */
     handleVerify = async (c) => {
+        if (!this.db)
+            return c.json({ error: "attestation not configured" }, 501);
         const userId = c.get("userId");
         const body = await c.req.json();
         if (!body.key_id)
@@ -30,6 +32,8 @@ export class AttestService {
     };
     /** Middleware: require valid attestation. */
     requireAttest = async (c, next) => {
+        if (!this.db)
+            return c.json({ error: "attestation not configured" }, 501);
         const userId = c.get("userId");
         if (!userId)
             return c.json({ error: "unauthorized" }, 401);

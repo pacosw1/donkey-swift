@@ -5,7 +5,7 @@ import { X509Certificate } from "node:crypto";
 // ── Types & Interfaces ──────────────────────────────────────────────────────
 
 export interface ReceiptDB {
-  upsertSubscription(userId: string, productId: string, originalTransactionId: string, status: string, expiresAt: Date | null, priceCents: number, currencyCode: string): Promise<void>;
+  upsertSubscription(userId: string, productId: string, originalTransactionId: string, status: string, expiresAt: Date | string | null, priceCents: number, currencyCode: string): Promise<void>;
   userIdByTransactionId(originalTransactionId: string): Promise<string>;
   storeTransaction(t: VerifiedTransaction): Promise<void>;
 }
@@ -33,8 +33,8 @@ export interface VerifiedTransaction {
   user_id: string;
   product_id: string;
   status: string;
-  purchase_date: Date;
-  expires_date: Date | null;
+  purchase_date: Date | string;
+  expires_date: Date | string | null;
   environment: string;
   price_cents: number;
   currency_code: string;

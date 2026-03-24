@@ -44,7 +44,7 @@ export class StorageClient {
     );
   }
 
-  async get(key: string): Promise<{ data: Buffer; contentType: string }> {
+  async get(key: string): Promise<{ data: Uint8Array; contentType: string }> {
     const result = await this.client.send(
       new GetObjectCommand({
         Bucket: this.bucket,
@@ -54,7 +54,7 @@ export class StorageClient {
 
     const body = await result.Body!.transformToByteArray();
     return {
-      data: Buffer.from(body),
+      data: new Uint8Array(body),
       contentType: result.ContentType ?? "application/octet-stream",
     };
   }

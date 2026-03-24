@@ -1,3 +1,6 @@
+function toDate(d) {
+    return d instanceof Date ? d : new Date(d);
+}
 // ── Service ─────────────────────────────────────────────────────────────────
 export class LifecycleService {
     cfg;
@@ -11,8 +14,8 @@ export class LifecycleService {
     async evaluateUser(userId) {
         const { createdAt, lastActiveAt } = await this.db.userCreatedAndLastActive(userId);
         const now = new Date();
-        const daysSinceActive = Math.floor((now.getTime() - lastActiveAt.getTime()) / (24 * 60 * 60 * 1000));
-        const createdDaysAgo = Math.floor((now.getTime() - createdAt.getTime()) / (24 * 60 * 60 * 1000));
+        const daysSinceActive = Math.floor((now.getTime() - toDate(lastActiveAt).getTime()) / (24 * 60 * 60 * 1000));
+        const createdDaysAgo = Math.floor((now.getTime() - toDate(createdAt).getTime()) / (24 * 60 * 60 * 1000));
         const totalSessions = await this.db.countSessions(userId);
         const recentSessions = await this.db.countRecentSessions(userId, new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000));
         const ahaReached = await this.checkAhaMoment(userId, now);
@@ -65,7 +68,7 @@ export class LifecycleService {
     async determinePrompt(userId, es) {
         const cooldownDays = this.cfg.promptCooldownDays ?? 3;
         const lastPrompt = await this.db.lastPrompt(userId).catch(() => null);
-        if (lastPrompt && Date.now() - lastPrompt.promptAt.getTime() < cooldownDays * 24 * 60 * 60 * 1000) {
+        if (lastPrompt && Date.now() - toDate(lastPrompt.promptAt).getTime() < cooldownDays * 24 * 60 * 60 * 1000) {
             return null;
         }
         if (this.cfg.promptBuilder)

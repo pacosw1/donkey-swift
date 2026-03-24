@@ -33,18 +33,18 @@ export interface StageRule {
 }
 export interface LifecycleDB {
     userCreatedAndLastActive(userId: string): Promise<{
-        createdAt: Date;
-        lastActiveAt: Date;
+        createdAt: Date | string;
+        lastActiveAt: Date | string;
     }>;
     countSessions(userId: string): Promise<number>;
-    countRecentSessions(userId: string, since: Date): Promise<number>;
-    countDistinctEventDays(userId: string, eventName: string, since: Date): Promise<number>;
+    countRecentSessions(userId: string, since: Date | string): Promise<number>;
+    countDistinctEventDays(userId: string, eventName: string, since: Date | string): Promise<number>;
     isProUser(userId: string): Promise<boolean>;
     lastPrompt(userId: string): Promise<{
         promptType: string;
-        promptAt: Date;
+        promptAt: Date | string;
     } | null>;
-    countPrompts(userId: string, promptType: string, since: Date): Promise<number>;
+    countPrompts(userId: string, promptType: string, since: Date | string): Promise<number>;
     recordPrompt(userId: string, event: string, metadata: string): Promise<void>;
     enabledDeviceTokens(userId: string): Promise<string[]>;
 }

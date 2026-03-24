@@ -42,13 +42,13 @@ export interface StageRule {
 // ── Database Interface ──────────────────────────────────────────────────────
 
 export interface LifecycleDB {
-  userCreatedAndLastActive(userId: string): Promise<{ createdAt: Date; lastActiveAt: Date }>;
+  userCreatedAndLastActive(userId: string): Promise<{ createdAt: Date | string; lastActiveAt: Date | string }>;
   countSessions(userId: string): Promise<number>;
-  countRecentSessions(userId: string, since: Date): Promise<number>;
-  countDistinctEventDays(userId: string, eventName: string, since: Date): Promise<number>;
+  countRecentSessions(userId: string, since: Date | string): Promise<number>;
+  countDistinctEventDays(userId: string, eventName: string, since: Date | string): Promise<number>;
   isProUser(userId: string): Promise<boolean>;
-  lastPrompt(userId: string): Promise<{ promptType: string; promptAt: Date } | null>;
-  countPrompts(userId: string, promptType: string, since: Date): Promise<number>;
+  lastPrompt(userId: string): Promise<{ promptType: string; promptAt: Date | string } | null>;
+  countPrompts(userId: string, promptType: string, since: Date | string): Promise<number>;
   recordPrompt(userId: string, event: string, metadata: string): Promise<void>;
   enabledDeviceTokens(userId: string): Promise<string[]>;
 }
@@ -58,6 +58,10 @@ export interface LifecycleConfig {
   customStages?: StageRule[];
   promptBuilder?: (userId: string, es: EngagementScore) => Promise<Prompt | null>;
   promptCooldownDays?: number;
+}
+
+function toDate(d: Date | string): Date {
+  return d instanceof Date ? d : new Date(d);
 }
 
 // ── Service ─────────────────────────────────────────────────────────────────
@@ -72,8 +76,8 @@ export class LifecycleService {
   async evaluateUser(userId: string): Promise<EngagementScore> {
     const { createdAt, lastActiveAt } = await this.db.userCreatedAndLastActive(userId);
     const now = new Date();
-    const daysSinceActive = Math.floor((now.getTime() - lastActiveAt.getTime()) / (24 * 60 * 60 * 1000));
-    const createdDaysAgo = Math.floor((now.getTime() - createdAt.getTime()) / (24 * 60 * 60 * 1000));
+    const daysSinceActive = Math.floor((now.getTime() - toDate(lastActiveAt).getTime()) / (24 * 60 * 60 * 1000));
+    const createdDaysAgo = Math.floor((now.getTime() - toDate(createdAt).getTime()) / (24 * 60 * 60 * 1000));
 
     const totalSessions = await this.db.countSessions(userId);
     const recentSessions = await this.db.countRecentSessions(userId, new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000));
@@ -125,7 +129,7 @@ export class LifecycleService {
   async determinePrompt(userId: string, es: EngagementScore): Promise<Prompt | null> {
     const cooldownDays = this.cfg.promptCooldownDays ?? 3;
     const lastPrompt = await this.db.lastPrompt(userId).catch(() => null);
-    if (lastPrompt && Date.now() - lastPrompt.promptAt.getTime() < cooldownDays * 24 * 60 * 60 * 1000) {
+    if (lastPrompt && Date.now() - toDate(lastPrompt.promptAt).getTime() < cooldownDays * 24 * 60 * 60 * 1000) {
       return null;
     }
 

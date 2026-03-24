@@ -20,7 +20,7 @@ export interface PushConfig {
   /** Bundle ID. */
   topic: string;
   /** "sandbox" or "production". */
-  environment?: string;
+  environment?: "sandbox" | "production";
 }
 
 /** Creates a push provider. Returns APNs if keyPath is set, LogProvider otherwise. */

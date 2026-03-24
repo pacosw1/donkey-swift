@@ -8,8 +8,8 @@ export interface User {
     apple_sub: string;
     email: string;
     name: string;
-    created_at: Date;
-    last_login_at: Date;
+    created_at: Date | string;
+    last_login_at: Date | string;
 }
 export interface AuthConfig {
     jwtSecret: string;

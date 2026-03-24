@@ -17,7 +17,7 @@ export interface ChatMessage {
     message: string;
     message_type: string;
     read_at: string | null;
-    created_at: Date;
+    created_at: Date | string;
 }
 export interface ChatThread {
     user_id: string;

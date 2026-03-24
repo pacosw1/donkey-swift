@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+function toDate(d) {
+    return d instanceof Date ? d : new Date(d);
+}
 // ── Service ─────────────────────────────────────────────────────────────────
 export class NotifyService {
     db;
@@ -164,7 +167,7 @@ export class NotifyScheduler {
         // Check interval since last notification
         const last = await this.db.lastNotificationDelivery(userId).catch(() => null);
         if (last) {
-            const elapsed = Date.now() - last.sent_at.getTime();
+            const elapsed = Date.now() - toDate(last.sent_at).getTime();
             if (elapsed < prefs.interval_seconds * 1000)
                 return;
         }

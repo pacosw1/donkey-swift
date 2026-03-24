@@ -26,7 +26,7 @@ export interface DeviceToken {
   os_version: string;
   app_version: string;
   enabled: boolean;
-  last_seen_at: Date;
+  last_seen_at: Date | string;
 }
 
 export interface NotificationPreferences {
@@ -46,7 +46,11 @@ export interface NotificationDelivery {
   title: string;
   body: string;
   status: string;
-  sent_at: Date;
+  sent_at: Date | string;
+}
+
+function toDate(d: Date | string): Date {
+  return d instanceof Date ? d : new Date(d);
 }
 
 // ── Service ─────────────────────────────────────────────────────────────────
@@ -248,7 +252,7 @@ export class NotifyScheduler {
     // Check interval since last notification
     const last = await this.db.lastNotificationDelivery(userId).catch(() => null);
     if (last) {
-      const elapsed = Date.now() - last.sent_at.getTime();
+      const elapsed = Date.now() - toDate(last.sent_at).getTime();
       if (elapsed < prefs.interval_seconds * 1000) return;
     }
 

@@ -4,7 +4,7 @@ import type { Context } from "hono";
 
 export interface EngageDB {
   trackEvents(userId: string, events: EventInput[]): Promise<void>;
-  updateSubscription(userId: string, productId: string, status: string, expiresAt: Date | null): Promise<void>;
+  updateSubscription(userId: string, productId: string, status: string, expiresAt: Date | string | null): Promise<void>;
   updateSubscriptionDetails(userId: string, originalTransactionId: string, priceCents: number, currencyCode: string): Promise<void>;
   getSubscription(userId: string): Promise<UserSubscription | null>;
   isProUser(userId: string): Promise<boolean>;
@@ -24,9 +24,9 @@ export interface UserSubscription {
   user_id: string;
   product_id: string;
   status: string;
-  expires_at: Date | null;
-  started_at: Date | null;
-  updated_at: Date;
+  expires_at: Date | string | null;
+  started_at: Date | string | null;
+  updated_at: Date | string;
 }
 
 export interface EngagementData {

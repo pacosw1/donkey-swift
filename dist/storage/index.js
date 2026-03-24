@@ -36,7 +36,7 @@ export class StorageClient {
         }));
         const body = await result.Body.transformToByteArray();
         return {
-            data: Buffer.from(body),
+            data: new Uint8Array(body),
             contentType: result.ContentType ?? "application/octet-stream",
         };
     }

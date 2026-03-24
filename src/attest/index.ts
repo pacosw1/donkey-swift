@@ -11,7 +11,7 @@ export interface AttestDB {
 // ── Service ─────────────────────────────────────────────────────────────────
 
 export class AttestService {
-  constructor(private db: AttestDB) {}
+  constructor(private db?: AttestDB) {}
 
   /** Generate a hex nonce for attestation challenges. */
   generateHexNonce(): string {
@@ -26,6 +26,8 @@ export class AttestService {
 
   /** POST /api/v1/attest/verify */
   handleVerify = async (c: Context) => {
+    if (!this.db) return c.json({ error: "attestation not configured" }, 501);
+
     const userId = c.get("userId") as string;
     const body = await c.req.json<{ key_id?: string; attestation?: string }>();
 
@@ -42,6 +44,8 @@ export class AttestService {
 
   /** Middleware: require valid attestation. */
   requireAttest = async (c: Context, next: () => Promise<void>) => {
+    if (!this.db) return c.json({ error: "attestation not configured" }, 501);
+
     const userId = c.get("userId") as string;
     if (!userId) return c.json({ error: "unauthorized" }, 401);
 

@@ -13,7 +13,7 @@ export declare class StorageClient {
     configured(): boolean;
     put(key: string, contentType: string, data: Buffer | Uint8Array): Promise<void>;
     get(key: string): Promise<{
-        data: Buffer;
+        data: Uint8Array;
         contentType: string;
     }>;
 }

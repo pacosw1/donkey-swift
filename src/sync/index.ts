@@ -4,13 +4,13 @@ import type { PushProvider } from "../push/index.js";
 // ── Types & Interfaces ──────────────────────────────────────────────────────
 
 export interface SyncDB {
-  serverTime(): Promise<Date>;
-  tombstones(userId: string, since: Date): Promise<DeletedEntry[]>;
+  serverTime(): Promise<Date | string>;
+  tombstones(userId: string, since: Date | string): Promise<DeletedEntry[]>;
   recordTombstone(userId: string, entityType: string, entityId: string): Promise<void>;
 }
 
 export interface EntityHandler {
-  changedSince(userId: string, since: Date, excludeDeviceId: string): Promise<Record<string, unknown>>;
+  changedSince(userId: string, since: Date | string, excludeDeviceId: string): Promise<Record<string, unknown>>;
   batchUpsert(userId: string, deviceId: string, items: BatchItem[]): Promise<{ items: BatchResponseItem[]; errors: BatchError[] }>;
   delete(userId: string, entityType: string, entityId: string): Promise<void>;
 }
@@ -22,7 +22,7 @@ export interface DeviceTokenStore {
 export interface DeletedEntry {
   entity_type: string;
   entity_id: string;
-  deleted_at: Date;
+  deleted_at: Date | string;
 }
 
 export interface BatchItem {
@@ -49,7 +49,7 @@ export interface BatchError {
 export interface BatchResponse {
   items: BatchResponseItem[];
   errors: BatchError[];
-  synced_at: Date;
+  synced_at: Date | string;
 }
 
 export interface DeviceInfo {
@@ -107,7 +107,7 @@ export class SyncService {
     const userId = c.get("userId") as string;
     const deviceId = c.req.header(HEADER_DEVICE_ID) ?? "";
 
-    let syncedAt: Date;
+    let syncedAt: Date | string;
     try {
       syncedAt = await this.db.serverTime();
     } catch {
@@ -172,7 +172,7 @@ export class SyncService {
       if (!item.fields) item.fields = {};
     }
 
-    let syncedAt: Date;
+    let syncedAt: Date | string;
     try {
       syncedAt = await this.db.serverTime();
     } catch {

@@ -21,7 +21,7 @@ export interface DeviceToken {
     os_version: string;
     app_version: string;
     enabled: boolean;
-    last_seen_at: Date;
+    last_seen_at: Date | string;
 }
 export interface NotificationPreferences {
     user_id: string;
@@ -39,7 +39,7 @@ export interface NotificationDelivery {
     title: string;
     body: string;
     status: string;
-    sent_at: Date;
+    sent_at: Date | string;
 }
 export declare class NotifyService {
     private db;

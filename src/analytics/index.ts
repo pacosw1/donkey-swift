@@ -3,8 +3,8 @@ import type { Context } from "hono";
 // ── Types & Interfaces ──────────────────────────────────────────────────────
 
 export interface AnalyticsDB {
-  dauTimeSeries(since: Date): Promise<DAURow[]>;
-  eventCounts(since: Date, event?: string): Promise<EventRow[]>;
+  dauTimeSeries(since: Date | string): Promise<DAURow[]>;
+  eventCounts(since: Date | string, event?: string): Promise<EventRow[]>;
   subscriptionBreakdown(): Promise<SubStats[]>;
   newSubscriptions30d(): Promise<number>;
   churnedSubscriptions30d(): Promise<number>;
