@@ -1,4 +1,9 @@
 import type { MiddlewareHandler } from "hono";
+/**
+ * Generates a unique request ID (or uses X-Request-ID from upstream proxy).
+ * Sets `requestId` in Hono context and adds X-Request-ID response header.
+ */
+export declare function requestId(): MiddlewareHandler;
 export interface AuthConfig {
     /** Validates a session token and returns the user ID. */
     parseToken: (token: string) => Promise<string>;
@@ -37,7 +42,7 @@ export declare class RateLimiter {
 }
 /** Rate limit middleware using the given RateLimiter. */
 export declare function rateLimit(rl: RateLimiter): MiddlewareHandler;
-/** Logs HTTP requests with duration. skipPaths are excluded from logging. */
+/** Logs HTTP requests with duration, request ID, and client IP. skipPaths are excluded from logging. */
 export declare function requestLog(...skipPaths: string[]): MiddlewareHandler;
 /** Adds X-API-Version and X-Minimum-Version response headers. */
 export declare function version(current: string, minimum: string): MiddlewareHandler;

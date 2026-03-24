@@ -179,7 +179,13 @@ export class SyncService {
       return c.json({ error: "failed to get server time" }, 500);
     }
 
-    const { items, errors } = await this.handler.batchUpsert(userId, deviceId, body.items);
+    let items: BatchResponseItem[];
+    let errors: BatchError[];
+    try {
+      ({ items, errors } = await this.handler.batchUpsert(userId, deviceId, body.items));
+    } catch {
+      return c.json({ error: "batch upsert failed" }, 500);
+    }
 
     const resp: BatchResponse = {
       items: items ?? [],

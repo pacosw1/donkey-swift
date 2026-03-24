@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import type { PushProvider } from "../push/index.js";
 export interface ChatDB {
-    /** Returns messages ordered by created_at ASC (oldest first). */
+    /** Returns messages ordered by created_at DESC (newest first). */
     getChatMessages(userId: string, limit: number, offset: number): Promise<ChatMessage[]>;
     getChatMessagesSince(userId: string, sinceId: number): Promise<ChatMessage[]>;
     sendChatMessage(userId: string, sender: string, message: string, messageType: string): Promise<ChatMessage>;
@@ -61,6 +61,8 @@ export declare class ChatService {
     handleGetChat: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
         error: string;
     }, 400, "json">) | (Response & import("hono").TypedResponse<{
+        error: string;
+    }, 500, "json">) | (Response & import("hono").TypedResponse<{
         messages: {
             id: number;
             user_id: string;
@@ -101,6 +103,8 @@ export declare class ChatService {
     handleAdminGetChat: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
         error: string;
     }, 400, "json">) | (Response & import("hono").TypedResponse<{
+        error: string;
+    }, 500, "json">) | (Response & import("hono").TypedResponse<{
         messages: {
             id: number;
             user_id: string;

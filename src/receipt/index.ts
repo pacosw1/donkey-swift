@@ -148,7 +148,12 @@ export class ReceiptService {
       return c.json({ error: "invalid signature" }, 400);
     }
 
-    const notification = JSON.parse(notificationPayload);
+    let notification: { notificationType?: string; subtype?: string; data?: { signedTransactionInfo?: string; environment?: string } };
+    try {
+      notification = JSON.parse(notificationPayload);
+    } catch {
+      return c.json({ error: "malformed notification payload" }, 400);
+    }
     console.log(`[receipt] webhook: type=${notification.notificationType} subtype=${notification.subtype} env=${notification.data?.environment}`);
 
     if (notification.notificationType === "TEST") {
@@ -177,7 +182,9 @@ export class ReceiptService {
       return c.json({ status: "unknown_transaction" });
     }
 
-    const status = this.notificationToStatus(notification.notificationType, notification.subtype, txn);
+    const notifType = notification.notificationType ?? "";
+    const notifSubtype = notification.subtype ?? "";
+    const status = this.notificationToStatus(notifType, notifSubtype, txn);
     const expiresAt = txn.expiresDate ? new Date(txn.expiresDate) : null;
     const currency = txn.currency || "USD";
     const priceCents = this.cfg.priceToCents
@@ -198,7 +205,7 @@ export class ReceiptService {
       environment: txn.environment,
       price_cents: priceCents,
       currency_code: currency,
-      notification_type: notification.notificationType,
+      notification_type: notifType || undefined,
     }).catch((err) => console.log(`[receipt] failed to store audit: ${err}`));
 
     return c.json({ status: "ok" });
@@ -219,13 +226,23 @@ export class ReceiptService {
     const leafCert = new X509Certificate(Buffer.from(x5c[0], "base64"));
     const rootCert = new X509Certificate(APPLE_ROOT_CA_PEM);
 
-    // Build intermediate chain
+    // Build intermediate chain and verify full chain: leaf → intermediate(s) → root
     const intermediates = x5c.slice(1).map((c) => new X509Certificate(Buffer.from(c, "base64")));
 
-    // Verify leaf chains to root (simplified: verify leaf against intermediate, intermediate against root)
     if (intermediates.length > 0) {
+      // Verify leaf cert was signed by first intermediate
+      if (!leafCert.verify(intermediates[0].publicKey)) {
+        throw new Error("leaf certificate verification failed");
+      }
+      // Verify each intermediate was signed by the next
+      for (let i = 0; i < intermediates.length - 1; i++) {
+        if (!intermediates[i].verify(intermediates[i + 1].publicKey)) {
+          throw new Error("intermediate certificate chain verification failed");
+        }
+      }
+      // Verify last intermediate was signed by Apple Root CA
       if (!intermediates[intermediates.length - 1].verify(rootCert.publicKey)) {
-        throw new Error("certificate chain verification failed");
+        throw new Error("root certificate chain verification failed");
       }
     }
 

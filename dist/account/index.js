@@ -14,30 +14,28 @@ export class AccountService {
     handleDeleteAccount = async (c) => {
         const userId = c.get("userId");
         const email = await this.db.getUserEmail(userId).catch(() => "");
-        // 1. App-specific tables first
-        if (this.appCleanup) {
-            try {
+        const deleteAll = async () => {
+            // 1. App-specific tables first
+            if (this.appCleanup) {
                 await this.appCleanup.deleteAppData(userId);
             }
-            catch {
-                return c.json({ error: "failed to delete app data" }, 500);
+            // 2. All donkeygo-managed tables
+            await this.db.deleteUserData(userId);
+            // 3. Delete user record last
+            await this.db.deleteUser(userId);
+        };
+        try {
+            if (this.db.withTransaction) {
+                await this.db.withTransaction(deleteAll);
+            }
+            else {
+                await deleteAll();
             }
         }
-        // 2. All donkeygo-managed tables
-        try {
-            await this.db.deleteUserData(userId);
-        }
         catch {
-            return c.json({ error: "failed to delete user data" }, 500);
+            return c.json({ error: "failed to delete account" }, 500);
         }
-        // 3. Delete user record last
-        try {
-            await this.db.deleteUser(userId);
-        }
-        catch {
-            return c.json({ error: "failed to delete user" }, 500);
-        }
-        // 4. Callback
+        // Callback (outside transaction — fire and forget)
         if (this.cfg.onDelete && email)
             this.cfg.onDelete(userId, email);
         return c.json({ status: "deleted" });

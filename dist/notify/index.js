@@ -16,6 +16,14 @@ export class NotifyService {
         const body = await c.req.json();
         if (!body.token)
             return c.json({ error: "token is required" }, 400);
+        if (body.token.length > 200)
+            return c.json({ error: "token too long" }, 400);
+        if (body.device_model && body.device_model.length > 100)
+            return c.json({ error: "device_model too long" }, 400);
+        if (body.os_version && body.os_version.length > 50)
+            return c.json({ error: "os_version too long" }, 400);
+        if (body.app_version && body.app_version.length > 50)
+            return c.json({ error: "app_version too long" }, 400);
         const dt = {
             id: randomUUID(),
             user_id: userId,
@@ -66,13 +74,14 @@ export class NotifyService {
     handleUpdatePrefs = async (c) => {
         const userId = c.get("userId");
         const body = await c.req.json();
-        let prefs;
+        let existing;
         try {
-            prefs = await this.db.getNotificationPreferences(userId);
+            existing = await this.db.getNotificationPreferences(userId);
         }
         catch {
             return c.json({ error: "failed to get preferences" }, 500);
         }
+        const prefs = { ...existing };
         if (body.push_enabled !== undefined)
             prefs.push_enabled = body.push_enabled;
         if (body.interval_seconds !== undefined) {

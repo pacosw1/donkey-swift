@@ -13,6 +13,8 @@ import type { AnalyticsService } from "../analytics/index.js";
 import type { AttestService } from "../attest/index.js";
 import type { HealthService } from "../health/index.js";
 import type { PaywallStore } from "../paywall/index.js";
+import type { Scheduler } from "../scheduler/index.js";
+import type { NotifyScheduler } from "../notify/index.js";
 import type { LogBuffer } from "../logbuf/index.js";
 export interface AppConfig {
     /** API version string (e.g. "1.0.0") */
@@ -41,6 +43,15 @@ export interface AppConfig {
     health: HealthService;
     paywallStore?: PaywallStore;
     logBuffer?: LogBuffer;
+    /** Maximum request body size in bytes (default: 1MB). */
+    maxBodySize?: number;
+    scheduler?: Scheduler;
+    notifyScheduler?: NotifyScheduler;
 }
-export declare function createApp(cfg: AppConfig): Hono;
+export interface AppResources {
+    app: Hono;
+    /** Call to clean up rate limiters, intervals, etc. */
+    shutdown(): void;
+}
+export declare function createApp(cfg: AppConfig): AppResources;
 //# sourceMappingURL=index.d.ts.map

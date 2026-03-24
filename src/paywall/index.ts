@@ -52,8 +52,8 @@ export class PaywallStore {
   /** Set config for a locale, auto-incrementing version. */
   set(locale: string, config: PaywallConfig): void {
     const existing = this.configs.get(locale);
-    config.version = existing ? existing.version + 1 : 1;
-    this.configs.set(locale, config);
+    const stored = { ...config, version: existing ? existing.version + 1 : 1 };
+    this.configs.set(locale, stored);
   }
 }
 

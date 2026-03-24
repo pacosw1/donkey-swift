@@ -1,6 +1,27 @@
 import type { MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { getClientIp } from "../httputil/index.js";
+
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
+// ── Request ID Middleware ────────────────────────────────────────────────────
+
+/**
+ * Generates a unique request ID (or uses X-Request-ID from upstream proxy).
+ * Sets `requestId` in Hono context and adds X-Request-ID response header.
+ */
+export function requestId(): MiddlewareHandler {
+  return async (c, next) => {
+    const id = c.req.header("x-request-id") ?? randomUUID();
+    c.set("requestId", id);
+    c.header("X-Request-ID", id);
+    await next();
+  };
+}
 
 // ── Auth Middleware ──────────────────────────────────────────────────────────
 
@@ -66,16 +87,17 @@ export function requireAdmin(cfg: AdminConfig): MiddlewareHandler {
   return async (c, next) => {
     let authenticated = false;
 
-    // Check admin API key
+    // Check admin API key (header or cookie only — never query params to avoid log leakage)
     if (cfg.adminKey) {
       const sources = [
         c.req.header("x-admin-key"),
-        c.req.query("key"),
-        c.req.query("admin_key"),
         getCookie(c, cfg.adminKeyCookieName ?? "admin_key"),
       ];
-      if (sources.some((s) => s === cfg.adminKey)) {
-        authenticated = true;
+      for (const s of sources) {
+        if (s && safeEqual(s, cfg.adminKey)) {
+          authenticated = true;
+          break;
+        }
       }
     }
 
@@ -197,7 +219,7 @@ export function rateLimit(rl: RateLimiter): MiddlewareHandler {
 
 // ── Request Log Middleware ───────────────────────────────────────────────────
 
-/** Logs HTTP requests with duration. skipPaths are excluded from logging. */
+/** Logs HTTP requests with duration, request ID, and client IP. skipPaths are excluded from logging. */
 export function requestLog(...skipPaths: string[]): MiddlewareHandler {
   const skip = new Set(skipPaths);
   return async (c, next) => {
@@ -208,8 +230,20 @@ export function requestLog(...skipPaths: string[]): MiddlewareHandler {
     if (skip.has(path)) return;
 
     const duration = Date.now() - start;
+    const reqId = (c.get("requestId") as string | undefined) ?? "-";
+    const userId = (c.get("userId") as string | undefined) ?? "-";
     console.log(
-      `[http] ${c.req.method} ${path} ${c.res.status} ${duration}ms ${getClientIp(c.req.raw)}`
+      JSON.stringify({
+        level: "info",
+        msg: "http",
+        method: c.req.method,
+        path,
+        status: c.res.status,
+        duration_ms: duration,
+        ip: getClientIp(c.req.raw),
+        request_id: reqId,
+        user_id: userId,
+      })
     );
   };
 }

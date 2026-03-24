@@ -73,6 +73,10 @@ export class NotifyService {
     }>();
 
     if (!body.token) return c.json({ error: "token is required" }, 400);
+    if (body.token.length > 200) return c.json({ error: "token too long" }, 400);
+    if (body.device_model && body.device_model.length > 100) return c.json({ error: "device_model too long" }, 400);
+    if (body.os_version && body.os_version.length > 50) return c.json({ error: "os_version too long" }, 400);
+    if (body.app_version && body.app_version.length > 50) return c.json({ error: "app_version too long" }, 400);
 
     const dt: DeviceToken = {
       id: randomUUID(),
@@ -134,13 +138,14 @@ export class NotifyService {
       stop_after_goal: boolean;
     }>>();
 
-    let prefs: NotificationPreferences;
+    let existing: NotificationPreferences;
     try {
-      prefs = await this.db.getNotificationPreferences(userId);
+      existing = await this.db.getNotificationPreferences(userId);
     } catch {
       return c.json({ error: "failed to get preferences" }, 500);
     }
 
+    const prefs = { ...existing };
     if (body.push_enabled !== undefined) prefs.push_enabled = body.push_enabled;
     if (body.interval_seconds !== undefined) {
       if (body.interval_seconds < 300) return c.json({ error: "interval_seconds must be at least 300 (5 minutes)" }, 400);

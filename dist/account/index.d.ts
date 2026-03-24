@@ -5,6 +5,12 @@ export interface AccountDB {
     deleteUser(userId: string): Promise<void>;
     anonymizeUser(userId: string): Promise<void>;
     exportUserData(userId: string): Promise<UserDataExport>;
+    /**
+     * Execute a callback inside a database transaction.
+     * If the callback throws, the transaction must be rolled back.
+     * Optional — if not provided, deletion steps run without a transaction wrapper.
+     */
+    withTransaction?<T>(fn: () => Promise<T>): Promise<T>;
 }
 export interface AppCleanup {
     deleteAppData(userId: string): Promise<void>;

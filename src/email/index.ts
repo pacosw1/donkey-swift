@@ -1,5 +1,3 @@
-import { createTransport, type Transporter } from "nodemailer";
-
 // ── Provider Interface ──────────────────────────────────────────────────────
 
 export interface EmailProvider {
@@ -21,7 +19,7 @@ export class NoopProvider implements EmailProvider {
   async send(): Promise<void> {}
 }
 
-// ── SMTPProvider ────────────────────────────────────────────────────────────
+// ── SMTP Config (for reference — implement SMTPProvider in your app) ────────
 
 export interface SMTPConfig {
   host: string;
@@ -32,42 +30,6 @@ export interface SMTPConfig {
   fromName?: string;
 }
 
-export class SMTPProvider implements EmailProvider {
-  private transport: Transporter;
-  private from: string;
-
-  constructor(cfg: SMTPConfig) {
-    if (!cfg.host || !cfg.port || !cfg.from) {
-      throw new Error("email: host, port, and from are required");
-    }
-    this.from = cfg.fromName ? `${cfg.fromName} <${cfg.from}>` : cfg.from;
-    this.transport = createTransport({
-      host: cfg.host,
-      port: cfg.port,
-      auth: cfg.username ? { user: cfg.username, pass: cfg.password } : undefined,
-    });
-  }
-
-  async send(to: string, subject: string, textBody: string, htmlBody?: string): Promise<void> {
-    await this.transport.sendMail({
-      from: this.from,
-      to,
-      subject,
-      text: textBody,
-      html: htmlBody || undefined,
-    });
-  }
-}
-
-/** Creates an email provider. Returns SMTP if host is set, LogProvider otherwise. */
-export function newProvider(cfg: Partial<SMTPConfig>): EmailProvider {
-  if (!cfg.host) {
-    console.log("[email] no SMTP host — using log provider");
-    return new LogProvider();
-  }
-  return new SMTPProvider(cfg as SMTPConfig);
-}
-
 // ── Template Renderer ───────────────────────────────────────────────────────
 
 export interface EmailTemplate {
@@ -76,7 +38,7 @@ export interface EmailTemplate {
   text?: string;
 }
 
-/** Simple template renderer with {{key}} interpolation. */
+/** Simple template renderer with {{.key}} interpolation. */
 export class Renderer {
   private templates = new Map<string, EmailTemplate>();
 

@@ -26,6 +26,7 @@ Hono middleware for auth, admin, CORS, rate limiting, logging, and versioning.
 ```typescript
 interface AuthConfig {
   parseToken: (token: string) => Promise<string>;
+  cookieName?: string;        // default: "session"
 }
 
 interface AdminConfig {
@@ -33,6 +34,8 @@ interface AdminConfig {
   adminEmail?: string;
   parseToken?: (token: string) => Promise<string>;
   getUserEmail?: (userId: string) => Promise<string>;
+  adminCookieName?: string;   // default: "admin_session"
+  adminKeyCookieName?: string; // default: "admin_key"
 }
 
 class RateLimiter {
@@ -49,6 +52,7 @@ function requireAuth(cfg: AuthConfig): MiddlewareHandler
 function requireAdmin(cfg: AdminConfig): MiddlewareHandler
 function cors(allowedOrigins: string): MiddlewareHandler
 function rateLimit(rl: RateLimiter): MiddlewareHandler
+function requestId(): MiddlewareHandler
 function requestLog(...skipPaths: string[]): MiddlewareHandler
 function version(current: string, minimum: string): MiddlewareHandler
 ```
@@ -109,6 +113,15 @@ class HealthService {
   handleHealth: (c: Context) => Promise<Response>   // GET /health
   handleReady: (c: Context) => Promise<Response>     // GET /ready
 }
+```
+
+### Functions
+
+```typescript
+function dbCheck(name: string, queryFn: () => Promise<unknown>): Check
+function urlCheck(name: string, url: string, timeoutMs?: number): Check
+function storageCheck(name: string, headFn: () => Promise<unknown>): Check
+function pushCheck(name: string, tokenFn: () => Promise<unknown>): Check
 ```
 
 ---
@@ -201,8 +214,8 @@ interface User {
   apple_sub: string;
   email: string;
   name: string;
-  created_at: Date;
-  last_login_at: Date;
+  created_at: Date | string;
+  last_login_at: Date | string;
 }
 
 interface AuthConfig {
@@ -211,6 +224,7 @@ interface AuthConfig {
   appleWebClientId?: string;
   sessionExpirySec?: number;   // default: 7 days
   productionEnv?: boolean;
+  cookieName?: string;         // default: "session"
 }
 ```
 
@@ -239,7 +253,7 @@ Event tracking, subscription management, sessions, feedback, and paywall eligibi
 ```typescript
 interface EngageDB {
   trackEvents(userId: string, events: EventInput[]): Promise<void>;
-  updateSubscription(userId: string, productId: string, status: string, expiresAt: Date | null): Promise<void>;
+  updateSubscription(userId: string, productId: string, status: string, expiresAt: Date | string | null): Promise<void>;
   updateSubscriptionDetails(userId: string, originalTransactionId: string, priceCents: number, currencyCode: string): Promise<void>;
   getSubscription(userId: string): Promise<UserSubscription | null>;
   isProUser(userId: string): Promise<boolean>;
@@ -263,9 +277,9 @@ interface UserSubscription {
   user_id: string;
   product_id: string;
   status: string;
-  expires_at: Date | null;
-  started_at: Date | null;
-  updated_at: Date;
+  expires_at: Date | string | null;
+  started_at: Date | string | null;
+  updated_at: Date | string;
 }
 
 interface EngagementData {
@@ -302,6 +316,8 @@ class EngageService {
 ### Functions
 
 ```typescript
+const VALID_STATUSES: string[]
+const VALID_FEEDBACK_TYPES: string[]
 function defaultPaywallTrigger(data: EngagementData): string
 ```
 
@@ -340,7 +356,7 @@ interface DeviceToken {
   os_version: string;
   app_version: string;
   enabled: boolean;
-  last_seen_at: Date;
+  last_seen_at: Date | string;
 }
 
 interface NotificationPreferences {
@@ -360,14 +376,14 @@ interface NotificationDelivery {
   title: string;
   body: string;
   status: string;
-  sent_at: Date;
+  sent_at: Date | string;
 }
 
 type TickFunc = (userId: string, prefs: NotificationPreferences, tokens: DeviceToken[], push: PushProvider) => Promise<void>;
 
 interface NotifySchedulerConfig {
   intervalMs?: number;
-  tickFunc?: TickFunc;
+  tickFunc: TickFunc;   // required — use defaultTick() for standard behavior
   extraTick?: () => Promise<void>;
 }
 ```
@@ -391,6 +407,12 @@ class NotifyScheduler {
 }
 ```
 
+### Functions
+
+```typescript
+function defaultTick(userId: string, prefs: NotificationPreferences, tokens: DeviceToken[], push: PushProvider): Promise<void>
+```
+
 ---
 
 ## push
@@ -411,7 +433,7 @@ interface PushConfig {
   keyId: string;
   teamId: string;
   topic: string;        // bundle ID
-  environment?: string; // "sandbox" or "production"
+  environment?: "sandbox" | "production";
 }
 ```
 
@@ -420,6 +442,7 @@ interface PushConfig {
 ```typescript
 class APNsProvider implements PushProvider {
   static async create(cfg: PushConfig): Promise<APNsProvider>
+  close(): void
   async send(deviceToken: string, title: string, body: string): Promise<void>
   async sendWithData(deviceToken: string, title: string, body: string, data: Record<string, string>): Promise<void>
   async sendSilent(deviceToken: string, data: Record<string, string>): Promise<void>
@@ -445,6 +468,7 @@ In-app support chat with WebSocket real-time delivery and push fallback.
 
 ```typescript
 interface ChatDB {
+  /** Returns messages ordered by created_at ASC (oldest first). */
   getChatMessages(userId: string, limit: number, offset: number): Promise<ChatMessage[]>;
   getChatMessagesSince(userId: string, sinceId: number): Promise<ChatMessage[]>;
   sendChatMessage(userId: string, sender: string, message: string, messageType: string): Promise<ChatMessage>;
@@ -465,7 +489,7 @@ interface ChatMessage {
   message: string;
   message_type: string;
   read_at: string | null;
-  created_at: Date;
+  created_at: Date | string;
 }
 
 interface ChatThread {
@@ -480,8 +504,12 @@ interface ChatThread {
 
 interface ChatConfig {
   parseToken: (token: string) => Promise<string>;
-  adminAuth?: (req: Request) => boolean;
+  adminAuth?: (req: Request) => boolean | Promise<boolean>;
+  adminDisplayName?: string;   // default: "Support" — used in push notification titles
 }
+
+interface WSConn { /* WebSocket connection wrapper */ }
+class Hub { /* WebSocket connection hub for real-time delivery */ }
 
 interface WSEvent {
   type: string;
@@ -500,6 +528,7 @@ class ChatService {
   handleAdminListChats: (c: Context) => Promise<Response>   // GET  /admin/api/chat
   handleAdminGetChat: (c: Context) => Promise<Response>     // GET  /admin/api/chat/:user_id
   handleAdminReplyChat: (c: Context) => Promise<Response>   // POST /admin/api/chat/:user_id
+  handleWSConnection(ws: WebSocket, userId: string, role: "user" | "admin"): () => void
   getHub(): Hub
 }
 ```
@@ -566,13 +595,13 @@ Offline-first delta sync with version-based conflict detection, idempotency, and
 
 ```typescript
 interface SyncDB {
-  serverTime(): Promise<Date>;
-  tombstones(userId: string, since: Date): Promise<DeletedEntry[]>;
+  serverTime(): Promise<Date | string>;
+  tombstones(userId: string, since: Date | string): Promise<DeletedEntry[]>;
   recordTombstone(userId: string, entityType: string, entityId: string): Promise<void>;
 }
 
 interface EntityHandler {
-  changedSince(userId: string, since: Date, excludeDeviceId: string): Promise<Record<string, unknown>>;
+  changedSince(userId: string, since: Date | string, excludeDeviceId: string): Promise<Record<string, unknown>>;
   batchUpsert(userId: string, deviceId: string, items: BatchItem[]): Promise<{ items: BatchResponseItem[]; errors: BatchError[] }>;
   delete(userId: string, entityType: string, entityId: string): Promise<void>;
 }
@@ -588,7 +617,7 @@ interface DeviceTokenStore {
 interface DeletedEntry {
   entity_type: string;
   entity_id: string;
-  deleted_at: Date;
+  deleted_at: Date | string;
 }
 
 interface BatchItem {
@@ -615,7 +644,7 @@ interface BatchError {
 interface BatchResponse {
   items: BatchResponseItem[];
   errors: BatchError[];
-  synced_at: Date;
+  synced_at: Date | string;
 }
 
 interface DeviceInfo {
@@ -667,7 +696,7 @@ class StorageClient {
   constructor(cfg: StorageConfig)
   configured(): boolean
   async put(key: string, contentType: string, data: Buffer | Uint8Array): Promise<void>
-  async get(key: string): Promise<{ data: Buffer; contentType: string }>
+  async get(key: string): Promise<{ data: Uint8Array; contentType: string }>
 }
 ```
 
@@ -681,7 +710,7 @@ StoreKit 2 server-side receipt verification with JWS chain-of-trust validation a
 
 ```typescript
 interface ReceiptDB {
-  upsertSubscription(userId: string, productId: string, originalTransactionId: string, status: string, expiresAt: Date | null, priceCents: number, currencyCode: string): Promise<void>;
+  upsertSubscription(userId: string, productId: string, originalTransactionId: string, status: string, expiresAt: Date | string | null, priceCents: number, currencyCode: string): Promise<void>;
   userIdByTransactionId(originalTransactionId: string): Promise<string>;
   storeTransaction(t: VerifiedTransaction): Promise<void>;
 }
@@ -713,8 +742,8 @@ interface VerifiedTransaction {
   user_id: string;
   product_id: string;
   status: string;
-  purchase_date: Date;
-  expires_date: Date | null;
+  purchase_date: Date | string;
+  expires_date: Date | string | null;
   environment: string;
   price_cents: number;
   currency_code: string;
@@ -732,6 +761,7 @@ interface VerifyResponse {
 interface ReceiptConfig {
   bundleId?: string;
   environment?: string;
+  priceToCents?: (priceMilliunits: number, currency: string) => number;
 }
 ```
 
@@ -805,14 +835,26 @@ function handleUpdateConfig(store: PaywallStore): (c: Context) => Promise<Respon
 
 ## attest
 
-Apple App Attest device verification.
+Apple App Attest device verification with CBOR attestation parsing, certificate chain validation, and assertion signature verification.
 
 ### DB Interface
 
 ```typescript
 interface AttestDB {
-  storeAttestKey(userId: string, keyId: string): Promise<void>;
-  getAttestKey(userId: string): Promise<string>;
+  storeAttestKey(userId: string, keyId: string, publicKey: string): Promise<void>;
+  getAttestKey(userId: string): Promise<{ keyId: string; publicKey: string }>;
+  storeChallenge(nonce: string, userId: string, expiresAt: Date): Promise<void>;
+  consumeChallenge(nonce: string, userId: string): Promise<boolean>;
+}
+```
+
+### Types
+
+```typescript
+interface AttestConfig {
+  appId?: string;             // Apple App ID (teamId.bundleId)
+  challengeTtlSec?: number;   // default: 300 (5 minutes)
+  production?: boolean;
 }
 ```
 
@@ -820,10 +862,11 @@ interface AttestDB {
 
 ```typescript
 class AttestService {
-  constructor(db: AttestDB)
+  constructor(db?: AttestDB, cfg?: AttestConfig)
   generateHexNonce(): string
   handleChallenge: (c: Context) => Promise<Response>                 // POST /api/v1/attest/challenge
   handleVerify: (c: Context) => Promise<Response>                    // POST /api/v1/attest/verify
+  handleAssert: (c: Context) => Promise<Response>                    // POST /api/v1/attest/assert
   requireAttest: (c: Context, next: () => Promise<void>) => Promise<Response>  // middleware
 }
 ```
@@ -843,6 +886,8 @@ interface AccountDB {
   deleteUser(userId: string): Promise<void>;
   anonymizeUser(userId: string): Promise<void>;
   exportUserData(userId: string): Promise<UserDataExport>;
+  /** Optional transaction wrapper — if provided, account deletion runs atomically. */
+  withTransaction?<T>(fn: () => Promise<T>): Promise<T>;
 }
 ```
 
@@ -879,7 +924,7 @@ interface AccountConfig {
 
 ```typescript
 class AccountService {
-  constructor(cfg: AccountConfig, db: AccountDB, ...opts: unknown[])
+  constructor(cfg: AccountConfig, db: AccountDB, opts?: { cleanup?: AppCleanup; exporter?: AppExporter })
   handleDeleteAccount: (c: Context) => Promise<Response>      // DELETE /api/v1/account
   handleAnonymizeAccount: (c: Context) => Promise<Response>   // POST   /api/v1/account/anonymize
   handleExportData: (c: Context) => Promise<Response>         // GET    /api/v1/account/export
@@ -944,13 +989,13 @@ User lifecycle stage classification, engagement scoring, and contextual prompts.
 
 ```typescript
 interface LifecycleDB {
-  userCreatedAndLastActive(userId: string): Promise<{ createdAt: Date; lastActiveAt: Date }>;
+  userCreatedAndLastActive(userId: string): Promise<{ createdAt: Date | string; lastActiveAt: Date | string }>;
   countSessions(userId: string): Promise<number>;
-  countRecentSessions(userId: string, since: Date): Promise<number>;
-  countDistinctEventDays(userId: string, eventName: string, since: Date): Promise<number>;
+  countRecentSessions(userId: string, since: Date | string): Promise<number>;
+  countDistinctEventDays(userId: string, eventName: string, since: Date | string): Promise<number>;
   isProUser(userId: string): Promise<boolean>;
-  lastPrompt(userId: string): Promise<{ promptType: string; promptAt: Date } | null>;
-  countPrompts(userId: string, promptType: string, since: Date): Promise<number>;
+  lastPrompt(userId: string): Promise<{ promptType: string; promptAt: Date | string } | null>;
+  countPrompts(userId: string, promptType: string, since: Date | string): Promise<number>;
   recordPrompt(userId: string, event: string, metadata: string): Promise<void>;
   enabledDeviceTokens(userId: string): Promise<string[]>;
 }
@@ -1025,8 +1070,8 @@ Admin analytics dashboards (DAU, events, MRR, summary).
 
 ```typescript
 interface AnalyticsDB {
-  dauTimeSeries(since: Date): Promise<DAURow[]>;
-  eventCounts(since: Date, event?: string): Promise<EventRow[]>;
+  dauTimeSeries(since: Date | string): Promise<DAURow[]>;
+  eventCounts(since: Date | string, event?: string): Promise<EventRow[]>;
   subscriptionBreakdown(): Promise<SubStats[]>;
   newSubscriptions30d(): Promise<number>;
   churnedSubscriptions30d(): Promise<number>;
@@ -1070,6 +1115,8 @@ interface AppConfig {
   apiVersion: string;
   minimumVersion: string;
   corsOrigins?: string;
+  apiPrefix?: string;    // default: "/api/v1"
+  adminPrefix?: string;  // default: "/admin/api"
   authConfig: AuthConfig;
   adminConfig: AdminConfig;
   auth: AuthService;
@@ -1086,12 +1133,21 @@ interface AppConfig {
   health: HealthService;
   paywallStore?: PaywallStore;
   logBuffer?: LogBuffer;
+  maxBodySize?: number;       // default: 1MB
+  scheduler?: Scheduler;
+  notifyScheduler?: NotifyScheduler;
+}
+
+interface AppResources {
+  app: Hono;
+  /** Clean up rate limiters, schedulers, intervals. */
+  shutdown(): void;
 }
 ```
 
 ### Functions
 
 ```typescript
-function createApp(cfg: AppConfig): Hono
+function createApp(cfg: AppConfig): AppResources
 function openApiSpec(): Record<string, unknown>
 ```

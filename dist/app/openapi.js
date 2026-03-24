@@ -285,8 +285,14 @@ function attestRoutes() {
         {
             method: "POST", path: "/api/v1/attest/verify",
             summary: "Verify device attestation", tags: ["Attest"], auth: true,
-            requestBody: obj({ key_id: str("App Attest key ID"), attestation: str("Base64-encoded attestation"), challenge: str("Challenge echo") }, ["key_id", "attestation"]),
+            requestBody: obj({ key_id: str("App Attest key ID"), attestation: str("Base64-encoded attestation object"), nonce: str("Challenge nonce") }, ["key_id", "attestation", "nonce"]),
             response: { status: 200, description: "Verification result", schema: obj({ status: str() }) },
+        },
+        {
+            method: "POST", path: "/api/v1/attest/assert",
+            summary: "Verify assertion from attested device", tags: ["Attest"], auth: true,
+            requestBody: obj({ assertion: str("Base64-encoded assertion"), client_data: str("Client data used in assertion"), nonce: str("Challenge nonce") }, ["assertion", "nonce"]),
+            response: { status: 200, description: "Assertion result", schema: obj({ status: str() }) },
         },
     ];
 }
@@ -304,28 +310,28 @@ function analyticsRoutes() {
     return [
         {
             method: "GET", path: "/admin/api/analytics/dau",
-            summary: "Daily active users time series", tags: ["Analytics"], auth: false,
-            parameters: [{ name: "days", in: "query", schema: { type: "integer", default: 30 } }],
-            response: { status: 200, description: "DAU time series", schema: obj({ dau: arr(ref("DAURow")) }) },
+            summary: "Daily active users time series", tags: ["Analytics"], auth: true,
+            parameters: [{ name: "since", in: "query", schema: strFmt("date-time") }],
+            response: { status: 200, description: "DAU time series", schema: obj({ data: arr(ref("DAURow")) }) },
         },
         {
             method: "GET", path: "/admin/api/analytics/events",
-            summary: "Event counts grouped by event name", tags: ["Analytics"], auth: false,
+            summary: "Event counts grouped by event name", tags: ["Analytics"], auth: true,
             parameters: [
-                { name: "days", in: "query", schema: { type: "integer", default: 30 } },
+                { name: "since", in: "query", schema: strFmt("date-time") },
                 { name: "event", in: "query", description: "Optional event name filter", schema: str() },
             ],
-            response: { status: 200, description: "Event counts", schema: obj({ events: arr(ref("EventRow")) }) },
+            response: { status: 200, description: "Event counts", schema: obj({ data: arr(ref("EventRow")) }) },
         },
         {
             method: "GET", path: "/admin/api/analytics/mrr",
-            summary: "Subscription and revenue summary", tags: ["Analytics"], auth: false,
-            response: { status: 200, description: "MRR breakdown", schema: obj({ breakdown: arr(ref("SubStats")), active_total: int(), new_30d: int(), churned_30d: int() }) },
+            summary: "Subscription and revenue summary", tags: ["Analytics"], auth: true,
+            response: { status: 200, description: "MRR breakdown", schema: obj({ breakdown: arr(ref("SubStats")), new_30d: int(), churned_30d: int() }) },
         },
         {
             method: "GET", path: "/admin/api/analytics/summary",
-            summary: "Overview stats (DAU, MAU, total users, active subs)", tags: ["Analytics"], auth: false,
-            response: { status: 200, description: "Summary stats", schema: obj({ dau_today: int(), mau: int(), total_users: int(), active_subs: int() }) },
+            summary: "Overview stats (DAU, MAU, total users, active subs)", tags: ["Analytics"], auth: true,
+            response: { status: 200, description: "Summary stats", schema: obj({ dau: int(), mau: int(), total_users: int(), active_subscriptions: int() }) },
         },
     ];
 }

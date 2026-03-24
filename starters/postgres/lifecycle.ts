@@ -57,12 +57,12 @@ export function withLifecycleDB(db: DrizzleDB): LifecycleDB {
     async lastPrompt(userId: string): Promise<{ promptType: string; promptAt: Date } | null> {
       const [row] = await db.execute<{ event: string; created_at: Date }>(sql`
         SELECT event, created_at FROM user_activity
-        WHERE user_id = ${userId} AND event LIKE 'prompt_%'
+        WHERE user_id = ${userId} AND event LIKE 'lifecycle_prompt_%'
         ORDER BY created_at DESC LIMIT 1
       `);
       if (!row) return null;
       return {
-        promptType: row.event.replace(/^prompt_/, ""),
+        promptType: row.event.replace(/^lifecycle_prompt_/, ""),
         promptAt: row.created_at,
       };
     },

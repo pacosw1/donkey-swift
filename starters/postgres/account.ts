@@ -18,23 +18,20 @@ export function withAccountDB(db: DrizzleDB): AccountDB {
     },
 
     async deleteUserData(userId: string): Promise<void> {
-      const tables = [
-        "feature_flag_overrides",
-        "verified_transactions",
-        "tombstones",
-        "chat_messages",
-        "notification_deliveries",
-        "user_notification_preferences",
-        "user_device_tokens",
-        "user_sessions",
-        "user_feedback",
-        "user_activity",
-        "user_subscriptions",
-      ];
-
-      for (const table of tables) {
-        await db.execute(sql.raw(`DELETE FROM ${table} WHERE user_id = '${userId}'`)).catch(() => {});
-      }
+      // Each table is a known constant — only userId is parameterized
+      await db.execute(sql`DELETE FROM feature_flag_overrides WHERE user_id = ${userId}`).catch(() => {});
+      await db.execute(sql`DELETE FROM verified_transactions WHERE user_id = ${userId}`).catch(() => {});
+      await db.execute(sql`DELETE FROM tombstones WHERE user_id = ${userId}`).catch(() => {});
+      await db.execute(sql`DELETE FROM chat_messages WHERE user_id = ${userId}`).catch(() => {});
+      await db.execute(sql`DELETE FROM notification_deliveries WHERE user_id = ${userId}`).catch(() => {});
+      await db.execute(sql`DELETE FROM user_notification_preferences WHERE user_id = ${userId}`).catch(() => {});
+      await db.execute(sql`DELETE FROM user_device_tokens WHERE user_id = ${userId}`).catch(() => {});
+      await db.execute(sql`DELETE FROM user_sessions WHERE user_id = ${userId}`).catch(() => {});
+      await db.execute(sql`DELETE FROM user_feedback WHERE user_id = ${userId}`).catch(() => {});
+      await db.execute(sql`DELETE FROM user_activity WHERE user_id = ${userId}`).catch(() => {});
+      await db.execute(sql`DELETE FROM user_subscriptions WHERE user_id = ${userId}`).catch(() => {});
+      await db.execute(sql`DELETE FROM user_attest_keys WHERE user_id = ${userId}`).catch(() => {});
+      await db.execute(sql`DELETE FROM attest_challenges WHERE user_id = ${userId}`).catch(() => {});
     },
 
     async deleteUser(userId: string): Promise<void> {

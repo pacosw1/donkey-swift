@@ -90,12 +90,27 @@ export class APNsProvider {
         };
         await this.sendPayload(deviceToken, payload, "background", "5");
     }
+    /** Close the HTTP/2 connection. Call on shutdown. */
+    close() {
+        if (this._h2client && !this._h2client.destroyed) {
+            this._h2client.close();
+            this._h2client = null;
+        }
+    }
     getH2Client() {
         if (this._h2client && !this._h2client.destroyed && !this._h2client.closed) {
             return this._h2client;
         }
         this._h2client = http2.connect(this.baseUrl);
-        this._h2client.on("error", () => { });
+        this._h2client.on("error", (err) => {
+            console.log(`[push] H2 connection error: ${err.message ?? err}`);
+            // Mark client as unusable so next call reconnects
+            this._h2client = null;
+        });
+        this._h2client.on("goaway", () => {
+            console.log("[push] H2 GOAWAY received, will reconnect on next request");
+            this._h2client = null;
+        });
         return this._h2client;
     }
     async sendPayload(deviceToken, payload, pushType, priority) {

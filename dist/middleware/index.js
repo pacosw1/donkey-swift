@@ -1,5 +1,24 @@
 import { getCookie } from "hono/cookie";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { getClientIp } from "../httputil/index.js";
+function safeEqual(a, b) {
+    if (a.length !== b.length)
+        return false;
+    return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+// ── Request ID Middleware ────────────────────────────────────────────────────
+/**
+ * Generates a unique request ID (or uses X-Request-ID from upstream proxy).
+ * Sets `requestId` in Hono context and adds X-Request-ID response header.
+ */
+export function requestId() {
+    return async (c, next) => {
+        const id = c.req.header("x-request-id") ?? randomUUID();
+        c.set("requestId", id);
+        c.header("X-Request-ID", id);
+        await next();
+    };
+}
 /**
  * Middleware that extracts user ID from Bearer token or session cookie.
  * Sets `userId` in Hono context.
@@ -38,16 +57,17 @@ export function requireAdmin(cfg) {
     }
     return async (c, next) => {
         let authenticated = false;
-        // Check admin API key
+        // Check admin API key (header or cookie only — never query params to avoid log leakage)
         if (cfg.adminKey) {
             const sources = [
                 c.req.header("x-admin-key"),
-                c.req.query("key"),
-                c.req.query("admin_key"),
                 getCookie(c, cfg.adminKeyCookieName ?? "admin_key"),
             ];
-            if (sources.some((s) => s === cfg.adminKey)) {
-                authenticated = true;
+            for (const s of sources) {
+                if (s && safeEqual(s, cfg.adminKey)) {
+                    authenticated = true;
+                    break;
+                }
             }
         }
         // Check admin session cookie
@@ -142,7 +162,7 @@ export function rateLimit(rl) {
     };
 }
 // ── Request Log Middleware ───────────────────────────────────────────────────
-/** Logs HTTP requests with duration. skipPaths are excluded from logging. */
+/** Logs HTTP requests with duration, request ID, and client IP. skipPaths are excluded from logging. */
 export function requestLog(...skipPaths) {
     const skip = new Set(skipPaths);
     return async (c, next) => {
@@ -152,7 +172,19 @@ export function requestLog(...skipPaths) {
         if (skip.has(path))
             return;
         const duration = Date.now() - start;
-        console.log(`[http] ${c.req.method} ${path} ${c.res.status} ${duration}ms ${getClientIp(c.req.raw)}`);
+        const reqId = c.get("requestId") ?? "-";
+        const userId = c.get("userId") ?? "-";
+        console.log(JSON.stringify({
+            level: "info",
+            msg: "http",
+            method: c.req.method,
+            path,
+            status: c.res.status,
+            duration_ms: duration,
+            ip: getClientIp(c.req.raw),
+            request_id: reqId,
+            user_id: userId,
+        }));
     };
 }
 // ── Version Middleware ───────────────────────────────────────────────────────

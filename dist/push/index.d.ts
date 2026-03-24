@@ -40,6 +40,8 @@ export declare class APNsProvider implements PushProvider {
     send(deviceToken: string, title: string, body: string): Promise<void>;
     sendWithData(deviceToken: string, title: string, body: string, data: Record<string, string>): Promise<void>;
     sendSilent(deviceToken: string, data: Record<string, string>): Promise<void>;
+    /** Close the HTTP/2 connection. Call on shutdown. */
+    close(): void;
     private getH2Client;
     private sendPayload;
 }

@@ -149,7 +149,16 @@ export const tombstones = pgTable(
 export const userAttestKeys = pgTable("user_attest_keys", {
   userId: text("user_id").primaryKey(),
   keyId: text("key_id").notNull(),
+  publicKey: text("public_key").notNull().default(""),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ── attest_challenges (attest) ──────────────────────────────────────────────
+
+export const attestChallenges = pgTable("attest_challenges", {
+  nonce: text("nonce").primaryKey(),
+  userId: text("user_id").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 });
 
 // ── chat_messages (chat) ─────────────────────────────────────────────────────

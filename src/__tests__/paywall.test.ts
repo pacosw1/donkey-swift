@@ -49,15 +49,15 @@ describe("PaywallStore", () => {
     const store = new PaywallStore();
     const cfg = makeConfig();
     store.set("en", cfg);
-    expect(cfg.version).toBe(1);
+    expect(store.get("en")!.version).toBe(1);
+    expect(cfg.version).toBe(0); // caller's object is not mutated
   });
 
   it("set increments version on subsequent updates", () => {
     const store = new PaywallStore();
     store.set("en", makeConfig());
-    const cfg2 = makeConfig();
-    store.set("en", cfg2);
-    expect(cfg2.version).toBe(2);
+    store.set("en", makeConfig());
+    expect(store.get("en")!.version).toBe(2);
   });
 
   it("set tracks versions independently per locale", () => {

@@ -4,7 +4,7 @@ import type { PushProvider } from "../push/index.js";
 // ── Types & Interfaces ──────────────────────────────────────────────────────
 
 export interface ChatDB {
-  /** Returns messages ordered by created_at ASC (oldest first). */
+  /** Returns messages ordered by created_at DESC (newest first). */
   getChatMessages(userId: string, limit: number, offset: number): Promise<ChatMessage[]>;
   getChatMessagesSince(userId: string, sinceId: number): Promise<ChatMessage[]>;
   sendChatMessage(userId: string, sender: string, message: string, messageType: string): Promise<ChatMessage>;
@@ -114,7 +114,12 @@ export class ChatService {
     if (sinceIdStr) {
       const sinceId = parseInt(sinceIdStr, 10);
       if (isNaN(sinceId)) return c.json({ error: "invalid since_id" }, 400);
-      const msgs = await this.db.getChatMessagesSince(userId, sinceId);
+      let msgs: ChatMessage[];
+      try {
+        msgs = await this.db.getChatMessagesSince(userId, sinceId);
+      } catch {
+        return c.json({ error: "failed to get messages" }, 500);
+      }
       await this.db.markChatRead(userId, "user").catch(() => {});
       return c.json({ messages: msgs, has_more: false });
     }
@@ -126,7 +131,12 @@ export class ChatService {
     if (limitStr) { const n = parseInt(limitStr); if (n > 0 && n <= 200) limit = n; }
     if (offsetStr) { const n = parseInt(offsetStr); if (n >= 0) offset = n; }
 
-    const msgs = await this.db.getChatMessages(userId, limit + 1, offset);
+    let msgs: ChatMessage[];
+    try {
+      msgs = await this.db.getChatMessages(userId, limit + 1, offset);
+    } catch {
+      return c.json({ error: "failed to get messages" }, 500);
+    }
     await this.db.markChatRead(userId, "user").catch(() => {});
 
     const hasMore = msgs.length > limit;
@@ -180,7 +190,12 @@ export class ChatService {
     if (limitStr) { const n = parseInt(limitStr); if (n > 0 && n <= 500) limit = n; }
     if (offsetStr) { const n = parseInt(offsetStr); if (n >= 0) offset = n; }
 
-    const msgs = await this.db.getChatMessages(userId, limit, offset);
+    let msgs: ChatMessage[];
+    try {
+      msgs = await this.db.getChatMessages(userId, limit, offset);
+    } catch {
+      return c.json({ error: "failed to get messages" }, 500);
+    }
     await this.db.markChatRead(userId, "admin").catch(() => {});
     return c.json({ messages: msgs });
   };
@@ -192,6 +207,7 @@ export class ChatService {
 
     const body = await c.req.json<{ message?: string; message_type?: string }>();
     if (!body.message) return c.json({ error: "message is required" }, 400);
+    if (body.message.length > 5000) return c.json({ error: "message too long (max 5000 chars)" }, 400);
 
     let msg: ChatMessage;
     try {

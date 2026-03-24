@@ -10,6 +10,7 @@ import type { ReceiptDB } from "../receipt/index.js";
 import type { AccountDB } from "../account/index.js";
 import type { LifecycleDB } from "../lifecycle/index.js";
 import type { AnalyticsDB } from "../analytics/index.js";
+import type { AttestDB } from "../attest/index.js";
 import { withAuthDB } from "./auth.js";
 import { withEngageDB } from "./engage.js";
 import { withNotifyDB } from "./notify.js";
@@ -20,6 +21,7 @@ import { withReceiptDB } from "./receipt.js";
 import { withAccountDB } from "./account.js";
 import { withLifecycleDB } from "./lifecycle.js";
 import { withAnalyticsDB } from "./analytics.js";
+import { withAttestDB } from "./attest.js";
 
 export type DrizzleDB = PostgresJsDatabase<typeof schema>;
 
@@ -41,6 +43,7 @@ export class PostgresDB implements AuthDB, EngageDB, NotifyDB, SyncDB, FlagsDB, 
   private _account: AccountDB;
   private _lifecycle: LifecycleDB;
   private _analytics: AnalyticsDB;
+  private _attest: AttestDB;
 
   constructor(public db: DrizzleDB) {
     this._auth = withAuthDB(db);
@@ -53,7 +56,12 @@ export class PostgresDB implements AuthDB, EngageDB, NotifyDB, SyncDB, FlagsDB, 
     this._account = withAccountDB(db);
     this._lifecycle = withLifecycleDB(db);
     this._analytics = withAnalyticsDB(db);
+    this._attest = withAttestDB(db);
   }
+
+  // ── AttestDB ─────────────────────────────────────────────────────────────
+  /** Returns an AttestDB-compatible object. */
+  attestDB(): AttestDB { return this._attest; }
 
   // ── AuthDB ──────────────────────────────────────────────────────────────
   upsertUserByAppleSub = (...args: Parameters<AuthDB["upsertUserByAppleSub"]>) => this._auth.upsertUserByAppleSub(...args);
@@ -128,6 +136,7 @@ export class PostgresDB implements AuthDB, EngageDB, NotifyDB, SyncDB, FlagsDB, 
   lastPrompt = (...args: Parameters<LifecycleDB["lastPrompt"]>) => this._lifecycle.lastPrompt(...args);
   countPrompts = (...args: Parameters<LifecycleDB["countPrompts"]>) => this._lifecycle.countPrompts(...args);
   recordPrompt = (...args: Parameters<LifecycleDB["recordPrompt"]>) => this._lifecycle.recordPrompt(...args);
+  isProUser = (...args: Parameters<LifecycleDB["isProUser"]>) => this._lifecycle.isProUser(...args);
 
   // ── AnalyticsDB ─────────────────────────────────────────────────────────
   dauTimeSeries = (...args: Parameters<AnalyticsDB["dauTimeSeries"]>) => this._analytics.dauTimeSeries(...args);

@@ -30,11 +30,13 @@ const auth = new AuthService(config, authDB);
 
 ## Conventions
 
-- Every package defines a DB interface (e.g. `AuthDB`, `SyncDB`, `EngageDB`) — no direct database dependency
+- **Interfaces only, no concrete implementations.** `src/` contains only DB interfaces, types, config objects, and service logic. No tables, no ORM imports, no SQL — zero database dependency. The hard logic lives here and is tested here, but the storage implementation is entirely up to the end user.
+- `starters/postgres/` is a **reference implementation** (Drizzle ORM) that users copy and customize. It is not part of the published package — it exists solely as an example of how to implement the interfaces.
+- Every package defines a DB interface (e.g. `AuthDB`, `SyncDB`, `EngageDB`) that the consumer implements with whatever ORM/driver they want (Drizzle, Prisma, raw SQL, etc.)
 - Handlers take `(c: Context) => Promise<Response>` — compatible with Hono
 - Services are constructed with a config object and a DB interface implementation
-- Apps implement adapters (DB interfaces) using whatever ORM/driver they want
 - All services are optional in `AppConfig` except `auth` and `health`
+- **Never add database-specific code to `src/`.** If a feature needs persistence, define the interface in `src/` and add the Drizzle implementation to `starters/postgres/`.
 
 ## Running tests
 

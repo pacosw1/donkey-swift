@@ -64,6 +64,9 @@ export class FlagsService {
         const body = await c.req.json();
         if (!body.key)
             return c.json({ error: "key is required" }, 400);
+        if (body.rollout_pct !== undefined && (body.rollout_pct < 0 || body.rollout_pct > 100)) {
+            return c.json({ error: "rollout_pct must be 0-100" }, 400);
+        }
         const flag = {
             key: body.key,
             enabled: body.enabled ?? true,
@@ -89,6 +92,9 @@ export class FlagsService {
         if (!existing)
             return c.json({ error: "flag not found" }, 404);
         const body = await c.req.json();
+        if (body.rollout_pct !== undefined && (body.rollout_pct < 0 || body.rollout_pct > 100)) {
+            return c.json({ error: "rollout_pct must be 0-100" }, 400);
+        }
         if (body.enabled !== undefined)
             existing.enabled = body.enabled;
         if (body.rollout_pct !== undefined)

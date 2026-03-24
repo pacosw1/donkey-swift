@@ -76,7 +76,8 @@ export class AuthService {
             ({ sub, email } = await this.verifyAppleIdToken(body.identity_token));
         }
         catch (err) {
-            return c.json({ error: `token verification failed: ${err}` }, 401);
+            console.log(`[auth] apple token verification failed: ${err}`);
+            return c.json({ error: "token verification failed" }, 401);
         }
         let user;
         try {

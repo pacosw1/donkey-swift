@@ -60,7 +60,13 @@ export class ChatService {
             const sinceId = parseInt(sinceIdStr, 10);
             if (isNaN(sinceId))
                 return c.json({ error: "invalid since_id" }, 400);
-            const msgs = await this.db.getChatMessagesSince(userId, sinceId);
+            let msgs;
+            try {
+                msgs = await this.db.getChatMessagesSince(userId, sinceId);
+            }
+            catch {
+                return c.json({ error: "failed to get messages" }, 500);
+            }
             await this.db.markChatRead(userId, "user").catch(() => { });
             return c.json({ messages: msgs, has_more: false });
         }
@@ -78,7 +84,13 @@ export class ChatService {
             if (n >= 0)
                 offset = n;
         }
-        const msgs = await this.db.getChatMessages(userId, limit + 1, offset);
+        let msgs;
+        try {
+            msgs = await this.db.getChatMessages(userId, limit + 1, offset);
+        }
+        catch {
+            return c.json({ error: "failed to get messages" }, 500);
+        }
         await this.db.markChatRead(userId, "user").catch(() => { });
         const hasMore = msgs.length > limit;
         return c.json({ messages: hasMore ? msgs.slice(0, limit) : msgs, has_more: hasMore });
@@ -137,7 +149,13 @@ export class ChatService {
             if (n >= 0)
                 offset = n;
         }
-        const msgs = await this.db.getChatMessages(userId, limit, offset);
+        let msgs;
+        try {
+            msgs = await this.db.getChatMessages(userId, limit, offset);
+        }
+        catch {
+            return c.json({ error: "failed to get messages" }, 500);
+        }
         await this.db.markChatRead(userId, "admin").catch(() => { });
         return c.json({ messages: msgs });
     };
@@ -149,6 +167,8 @@ export class ChatService {
         const body = await c.req.json();
         if (!body.message)
             return c.json({ error: "message is required" }, 400);
+        if (body.message.length > 5000)
+            return c.json({ error: "message too long (max 5000 chars)" }, 400);
         let msg;
         try {
             msg = await this.db.sendChatMessage(userId, "admin", body.message, body.message_type ?? "text");

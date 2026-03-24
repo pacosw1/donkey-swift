@@ -75,6 +75,10 @@ export declare class NotifyService {
     }, 500, "json">)>;
     /** PUT /api/v1/notifications/preferences */
     handleUpdatePrefs: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
+        error: string;
+    }, 500, "json">) | (Response & import("hono").TypedResponse<{
+        error: string;
+    }, 400, "json">) | (Response & import("hono").TypedResponse<{
         user_id: string;
         push_enabled: boolean;
         interval_seconds: number;
@@ -82,11 +86,7 @@ export declare class NotifyService {
         sleep_hour: number;
         timezone: string;
         stop_after_goal: boolean;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">)>;
+    }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
     /** POST /api/v1/notifications/opened */
     handleNotificationOpened: (c: Context) => Promise<Response & import("hono").TypedResponse<{
         status: string;

@@ -8,6 +8,12 @@ export interface AccountDB {
   deleteUser(userId: string): Promise<void>;
   anonymizeUser(userId: string): Promise<void>;
   exportUserData(userId: string): Promise<UserDataExport>;
+  /**
+   * Execute a callback inside a database transaction.
+   * If the callback throws, the transaction must be rolled back.
+   * Optional — if not provided, deletion steps run without a transaction wrapper.
+   */
+  withTransaction?<T>(fn: () => Promise<T>): Promise<T>;
 }
 
 export interface AppCleanup {
@@ -55,21 +61,28 @@ export class AccountService {
     const userId = c.get("userId") as string;
     const email = await this.db.getUserEmail(userId).catch(() => "");
 
-    // 1. App-specific tables first
-    if (this.appCleanup) {
-      try { await this.appCleanup.deleteAppData(userId); }
-      catch { return c.json({ error: "failed to delete app data" }, 500); }
+    const deleteAll = async () => {
+      // 1. App-specific tables first
+      if (this.appCleanup) {
+        await this.appCleanup.deleteAppData(userId);
+      }
+      // 2. All donkeygo-managed tables
+      await this.db.deleteUserData(userId);
+      // 3. Delete user record last
+      await this.db.deleteUser(userId);
+    };
+
+    try {
+      if (this.db.withTransaction) {
+        await this.db.withTransaction(deleteAll);
+      } else {
+        await deleteAll();
+      }
+    } catch {
+      return c.json({ error: "failed to delete account" }, 500);
     }
 
-    // 2. All donkeygo-managed tables
-    try { await this.db.deleteUserData(userId); }
-    catch { return c.json({ error: "failed to delete user data" }, 500); }
-
-    // 3. Delete user record last
-    try { await this.db.deleteUser(userId); }
-    catch { return c.json({ error: "failed to delete user" }, 500); }
-
-    // 4. Callback
+    // Callback (outside transaction — fire and forget)
     if (this.cfg.onDelete && email) this.cfg.onDelete(userId, email);
 
     return c.json({ status: "deleted" });

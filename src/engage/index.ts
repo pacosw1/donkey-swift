@@ -81,9 +81,14 @@ export class EngageService {
     if (!body.events?.length) return c.json({ error: "events array is required" }, 400);
     if (body.events.length > 100) return c.json({ error: "maximum 100 events per batch" }, 400);
 
+    for (const e of body.events) {
+      if (!e.event || typeof e.event !== "string") return c.json({ error: "each event must have a string 'event' field" }, 400);
+      if (e.event.length > 200) return c.json({ error: "event name too long (max 200 chars)" }, 400);
+    }
+
     const dbEvents: EventInput[] = body.events.map((e) => ({
       event: e.event,
-      metadata: e.metadata ? JSON.stringify(e.metadata) : "{}",
+      metadata: e.metadata ? JSON.stringify(e.metadata).slice(0, 10_000) : "{}",
       timestamp: e.timestamp ?? "",
     }));
 
@@ -148,7 +153,11 @@ export class EngageService {
     }>();
 
     if (!body.session_id || !body.action) return c.json({ error: "session_id and action required" }, 400);
+    if (body.session_id.length > 100) return c.json({ error: "session_id too long" }, 400);
     if (body.action !== "start" && body.action !== "end") return c.json({ error: "action must be 'start' or 'end'" }, 400);
+    if (body.action === "end" && body.duration_s !== undefined && (body.duration_s < 0 || body.duration_s > 86400)) {
+      return c.json({ error: "duration_s must be 0-86400" }, 400);
+    }
 
     try {
       if (body.action === "start") {
@@ -197,6 +206,7 @@ export class EngageService {
     const body = await c.req.json<{ type?: string; message?: string; app_version?: string }>();
 
     if (!body.message) return c.json({ error: "message is required" }, 400);
+    if (body.message.length > 5000) return c.json({ error: "message too long (max 5000 chars)" }, 400);
 
     const feedbackType = body.type || "general";
     if (!VALID_FEEDBACK_TYPES.has(feedbackType)) {
