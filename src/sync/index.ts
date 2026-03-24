@@ -236,8 +236,12 @@ export class SyncService {
     return c.json({ status: "deleted" });
   };
 
-  private notifyOtherDevices(userId: string, excludeDeviceId: string): void {
-    if (!this.push || !this.tokens) return;
+  /** Notify other devices of a sync event. Debounced per user. */
+  notifyOtherDevices(userId: string, excludeDeviceId: string = ""): void {
+    if (!this.push || !this.tokens) {
+      console.log(`[sync] notifyOtherDevices skipped — no push/tokens configured`);
+      return;
+    }
 
     // No debounce — fire immediately
     if (this.pushDebounceMs <= 0) {
@@ -249,6 +253,8 @@ export class SyncService {
     const existing = this.pendingPush.get(userId);
     if (existing) clearTimeout(existing.timer);
 
+    console.log(`[sync] debounced push queued for ${userId} (${this.pushDebounceMs}ms)`);
+
     const timer = setTimeout(() => {
       this.pendingPush.delete(userId);
       this.fireNotify(userId, excludeDeviceId);
@@ -259,13 +265,23 @@ export class SyncService {
 
   private fireNotify(userId: string, excludeDeviceId: string): void {
     this.tokens!.enabledTokensForUser(userId).then((devices) => {
+      console.log(`[sync] firing silent push for ${userId}: ${devices.length} devices, exclude=${excludeDeviceId || "none"}`);
       const data = { action: "sync" };
+      let sent = 0;
       for (const d of devices) {
-        if (d.deviceId === excludeDeviceId) continue;
-        this.push!.sendSilent(d.token, data).catch((err) => {
-          console.log(`[sync] silent push failed for device ${d.deviceId}: ${err}`);
+        if (d.deviceId === excludeDeviceId) {
+          console.log(`[sync] skip device ${d.deviceId} (requester)`);
+          continue;
+        }
+        const short = `...${d.token.slice(-8)}`;
+        this.push!.sendSilent(d.token, data).then(() => {
+          console.log(`[sync] push sent OK to ${short}`);
+        }).catch((err) => {
+          console.log(`[sync] push FAILED for ${short}: ${err}`);
         });
+        sent++;
       }
+      console.log(`[sync] ${sent} pushes dispatched`);
     }).catch((err) => {
       console.log(`[sync] failed to get device tokens for ${userId}: ${err}`);
     });

@@ -103,7 +103,8 @@ export declare class SyncService {
     }, 500, "json">) | (Response & import("hono").TypedResponse<{
         status: string;
     }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
-    private notifyOtherDevices;
+    /** Notify other devices of a sync event. Debounced per user. */
+    notifyOtherDevices(userId: string, excludeDeviceId?: string): void;
     private fireNotify;
 }
 //# sourceMappingURL=index.d.ts.map
