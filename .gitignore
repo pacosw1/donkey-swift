@@ -1,5 +1,5 @@
 node_modules/
-dist/
+# dist/ is committed for packages installed from GitHub
 .env
 .env.*
 !.env.example
