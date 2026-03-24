@@ -1,9 +1,6 @@
 export interface StorageProvider {
-    /** Whether storage is configured and ready. */
     configured(): boolean;
-    /** Upload an object. */
     put(key: string, contentType: string, data: Buffer | Uint8Array): Promise<void>;
-    /** Download an object. */
     get(key: string): Promise<{
         data: Uint8Array;
         contentType: string;
@@ -15,6 +12,18 @@ export interface StorageConfig {
     endpoint?: string;
     accessKeyId?: string;
     secretAccessKey?: string;
+}
+export declare class StorageClient implements StorageProvider {
+    private client;
+    private bucket;
+    private _configured;
+    constructor(cfg: StorageConfig);
+    configured(): boolean;
+    put(key: string, contentType: string, data: Buffer | Uint8Array): Promise<void>;
+    get(key: string): Promise<{
+        data: Uint8Array;
+        contentType: string;
+    }>;
 }
 export declare class NoopStorageProvider implements StorageProvider {
     configured(): boolean;

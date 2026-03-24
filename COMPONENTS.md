@@ -637,7 +637,7 @@ class ChatService {
 
 ## email
 
-Email sending interface with template rendering. Interface-only — implement your own provider (e.g. SMTP via nodemailer, SES, Resend).
+Email sending with SMTP transport and template rendering.
 
 ### Types
 
@@ -665,6 +665,11 @@ interface EmailTemplate {
 ### Service
 
 ```typescript
+class SMTPProvider implements EmailProvider {
+  constructor(cfg: SMTPConfig)
+  async send(to: string, subject: string, textBody: string, htmlBody?: string): Promise<void>
+}
+
 class LogProvider implements EmailProvider { /* logs to console */ }
 class NoopProvider implements EmailProvider { /* no-op */ }
 
@@ -672,6 +677,12 @@ class Renderer {
   register(name: string, template: EmailTemplate): void
   render(name: string, data: Record<string, string>): { subject: string; html: string; text: string }
 }
+```
+
+### Functions
+
+```typescript
+function newProvider(cfg: Partial<SMTPConfig>): EmailProvider
 ```
 
 ---
@@ -764,7 +775,7 @@ class SyncService {
 
 ## storage
 
-Object storage interface. Interface-only — implement with S3, R2, GCS, or any provider.
+S3-compatible object storage client.
 
 ### Types
 
@@ -787,6 +798,13 @@ interface StorageConfig {
 ### Service
 
 ```typescript
+class StorageClient implements StorageProvider {
+  constructor(cfg: StorageConfig)
+  configured(): boolean
+  async put(key: string, contentType: string, data: Buffer | Uint8Array): Promise<void>
+  async get(key: string): Promise<{ data: Uint8Array; contentType: string }>
+}
+
 class NoopStorageProvider implements StorageProvider {
   configured(): boolean   // returns false
   put(): Promise<void>    // throws "storage not configured"
