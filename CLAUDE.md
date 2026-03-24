@@ -1,13 +1,15 @@
 # Donkey-Swift
 
-Shared TypeScript packages for iOS app backends. Interface-based DB, Hono handlers, zero database dependency.
+Shared TypeScript packages for iOS app backends. Framework-agnostic services — pure business logic with no HTTP framework dependency.
 
 ## Project structure
 
 - `src/` — Package source (auth, sync, push, chat, engage, notify, etc.)
-  - Each subdirectory is a package exporting DB interfaces, types, and service classes
+  - Each subdirectory is a package exporting DB interfaces, types, service classes, and error types
+  - **Zero HTTP framework dependency** — no Hono, no Express, no Fastify
 - `dist/` — Compiled output (committed to repo for GitHub installs)
 - `starters/postgres/` — Reference PostgreSQL implementation (Drizzle ORM) — copy and customize
+- `starters/hono/` — Reference Hono route wiring — copy and customize
 - `mcp/` — MCP server + SQLite FTS5 index for AI-assisted discovery
 - `COMPONENTS.md` — Package API catalog (source of truth for MCP index)
 
@@ -21,21 +23,36 @@ npm install pacosw1/donkey-swift
 
 ```ts
 import { AuthService } from "donkey-swift/auth";
+import { ValidationError, NotFoundError } from "donkey-swift/errors";
 import type { AuthDB } from "donkey-swift/auth";
 
-// Implement the interface with your own DB
+// 1. Implement the DB interface with your own ORM
 const authDB: AuthDB = { ... };
 const auth = new AuthService(config, authDB);
+
+// 2. Call service methods from your routes (any framework)
+const result = await auth.authenticateWithApple(identityToken, name);
+const user = await auth.getUser(userId);
+
+// 3. Handle errors in your route handler
+try {
+  const result = await engage.trackEvents(userId, events);
+  res.json(result);
+} catch (err) {
+  if (err instanceof ValidationError) res.status(400).json({ error: err.message });
+  else if (err instanceof NotFoundError) res.status(404).json({ error: err.message });
+  else res.status(500).json({ error: "internal error" });
+}
 ```
 
 ## Conventions
 
-- **DB interfaces only — no ORM, no SQL, no tables in `src/`.** Every package defines a DB interface (e.g. `AuthDB`, `SyncDB`, `EngageDB`) that the consumer implements with whatever ORM/driver they want (Drizzle, Prisma, raw SQL, etc.). The hard logic lives here and is tested here, but the database implementation is entirely up to the end user.
-- **Generic infrastructure clients belong in `src/`.** Things like `StorageClient` (S3), `SMTPProvider` (nodemailer), `APNsProvider` (HTTP/2), and `AppStoreServerClient` are universal implementations — not app-specific. They go in `src/` alongside their interfaces.
-- `starters/postgres/` is a **reference DB implementation** (Drizzle ORM) that users copy and customize. It is not part of the published package — it exists solely as an example of how to implement the DB interfaces.
-- Handlers take `(c: Context) => Promise<Response>` — compatible with Hono
-- Services are constructed with a config object and a DB interface implementation
-- All services are optional in `AppConfig` except `auth` and `health`
+- **Framework-agnostic services.** Services are pure TypeScript classes with plain methods that take arguments and return objects. No HTTP request/response objects, no middleware, no route handlers. The user wires services into their own routes using whatever HTTP framework they want.
+- **Typed errors instead of HTTP status codes.** Services throw `ValidationError`, `NotFoundError`, `UnauthorizedError`, etc. from `donkey-swift/errors`. The user maps these to HTTP responses in their route handlers.
+- **DB interfaces only — no ORM, no SQL, no tables in `src/`.** Every package defines a DB interface (e.g. `AuthDB`, `SyncDB`, `EngageDB`) that the consumer implements with whatever ORM/driver they want. The hard logic lives here and is tested here, but the database implementation is entirely up to the end user.
+- **Generic infrastructure clients belong in `src/`.** Things like `StorageClient` (S3), `SMTPProvider` (nodemailer), `APNsProvider` (HTTP/2), and `AppStoreServerClient` are universal implementations — not app-specific.
+- `starters/postgres/` is a **reference DB implementation** (Drizzle ORM). `starters/hono/` is a **reference route wiring** (Hono). Both are examples — not part of the published package.
+- **Never add HTTP framework code to `src/`.** No `import { Context } from "hono"`, no `req`/`res`, no middleware. If you need route examples, add them to `starters/hono/`.
 - **Never add database-specific code to `src/`.** If a feature needs persistence, define the interface in `src/` and add the Drizzle implementation to `starters/postgres/`.
 
 ## Running tests

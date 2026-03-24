@@ -1,5 +1,4 @@
 import { describe, it, expect, vi } from "vitest";
-import { Hono } from "hono";
 import {
   NotifyService,
   getHourInTimezone,
@@ -9,6 +8,7 @@ import {
   type DeviceToken,
 } from "../notify/index.js";
 import type { PushProvider } from "../push/index.js";
+import { ValidationError, ServiceError } from "../errors/index.js";
 
 function mockNotifyDB(overrides: Partial<NotifyDB> = {}): NotifyDB {
   return {
@@ -46,134 +46,96 @@ function defaultPrefs(): NotificationPreferences {
   };
 }
 
-function buildApp(svc: NotifyService): Hono {
-  const a = new Hono();
-  a.use("*", async (c, next) => {
-    c.set("userId", "user-1");
-    await next();
-  });
-  a.post("/devices", svc.handleRegisterDevice);
-  a.delete("/devices", svc.handleDisableDevice);
-  a.get("/preferences", svc.handleGetPrefs);
-  a.put("/preferences", svc.handleUpdatePrefs);
-  return a;
-}
-
 describe("NotifyService", () => {
-  describe("handleRegisterDevice", () => {
-    it("rejects missing token (400)", async () => {
+  describe("registerDevice", () => {
+    it("rejects missing token", async () => {
       const svc = new NotifyService(mockNotifyDB(), mockPush());
-      const app = buildApp(svc);
-
-      const res = await app.request("/devices", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.error).toMatch(/token/i);
+      await expect(
+        svc.registerDevice("user-1", { token: "" })
+      ).rejects.toThrow(ValidationError);
+      await expect(
+        svc.registerDevice("user-1", { token: "" })
+      ).rejects.toThrow(/token/i);
     });
 
-    it("rejects token > 200 chars (400)", async () => {
+    it("rejects token > 200 chars", async () => {
       const svc = new NotifyService(mockNotifyDB(), mockPush());
-      const app = buildApp(svc);
-
-      const res = await app.request("/devices", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: "a".repeat(201) }),
-      });
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.error).toMatch(/token.*long/i);
+      await expect(
+        svc.registerDevice("user-1", { token: "a".repeat(201) })
+      ).rejects.toThrow(/token.*long/i);
     });
 
-    it("registers successfully (201)", async () => {
+    it("registers successfully", async () => {
       const db = mockNotifyDB();
       const svc = new NotifyService(db, mockPush());
-      const app = buildApp(svc);
 
-      const res = await app.request("/devices", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          token: "apns-token-abc",
-          platform: "ios",
-          device_model: "iPhone15,2",
-          os_version: "17.0",
-          app_version: "1.0.0",
-        }),
+      const result = await svc.registerDevice("user-1", {
+        token: "apns-token-abc",
+        platform: "ios",
+        device_model: "iPhone15,2",
+        os_version: "17.0",
+        app_version: "1.0.0",
       });
-      expect(res.status).toBe(201);
-      const body = await res.json();
-      expect(body.status).toBe("registered");
+
+      expect(result.status).toBe("registered");
       expect(db.upsertDeviceToken).toHaveBeenCalled();
       expect(db.ensureNotificationPreferences).toHaveBeenCalledWith("user-1");
     });
-  });
 
-  describe("handleDisableDevice", () => {
-    it("rejects missing token (400)", async () => {
-      const svc = new NotifyService(mockNotifyDB(), mockPush());
-      const app = buildApp(svc);
-
-      const res = await app.request("/devices", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+    it("throws ServiceError when DB fails", async () => {
+      const db = mockNotifyDB({
+        upsertDeviceToken: vi.fn().mockRejectedValue(new Error("db down")),
       });
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.error).toMatch(/token/i);
+      const svc = new NotifyService(db, mockPush());
+      await expect(
+        svc.registerDevice("user-1", { token: "valid-token" })
+      ).rejects.toThrow(ServiceError);
     });
   });
 
-  describe("handleGetPrefs", () => {
+  describe("disableDevice", () => {
+    it("rejects missing token", async () => {
+      const svc = new NotifyService(mockNotifyDB(), mockPush());
+      await expect(svc.disableDevice("user-1", "")).rejects.toThrow(/token/i);
+    });
+
+    it("disables successfully", async () => {
+      const db = mockNotifyDB();
+      const svc = new NotifyService(db, mockPush());
+      const result = await svc.disableDevice("user-1", "some-token");
+      expect(result.status).toBe("disabled");
+      expect(db.disableDeviceToken).toHaveBeenCalledWith("user-1", "some-token");
+    });
+  });
+
+  describe("getPreferences", () => {
     it("returns preferences", async () => {
       const prefs = defaultPrefs();
       const db = mockNotifyDB({
         getNotificationPreferences: vi.fn().mockResolvedValue(prefs),
       });
       const svc = new NotifyService(db, mockPush());
-      const app = buildApp(svc);
 
-      const res = await app.request("/preferences");
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.user_id).toBe("user-1");
-      expect(body.interval_seconds).toBe(3600);
-      expect(body.wake_hour).toBe(8);
+      const result = await svc.getPreferences("user-1");
+      expect(result.user_id).toBe("user-1");
+      expect(result.interval_seconds).toBe(3600);
+      expect(result.wake_hour).toBe(8);
     });
   });
 
-  describe("handleUpdatePrefs", () => {
-    it("rejects interval < 300 (400)", async () => {
+  describe("updatePreferences", () => {
+    it("rejects interval < 300", async () => {
       const svc = new NotifyService(mockNotifyDB(), mockPush());
-      const app = buildApp(svc);
-
-      const res = await app.request("/preferences", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ interval_seconds: 100 }),
-      });
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.error).toMatch(/interval_seconds/i);
+      await expect(
+        svc.updatePreferences("user-1", { interval_seconds: 100 })
+      ).rejects.toThrow(/interval_seconds/i);
     });
 
-    it("rejects wake_hour > 23 (400)", async () => {
+    it("rejects wake_hour > 23", async () => {
       const svc = new NotifyService(mockNotifyDB(), mockPush());
-      const app = buildApp(svc);
-
-      const res = await app.request("/preferences", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ wake_hour: 24 }),
-      });
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.error).toMatch(/wake_hour/i);
+      await expect(
+        svc.updatePreferences("user-1", { wake_hour: 24 })
+      ).rejects.toThrow(/wake_hour/i);
     });
 
     it("updates preferences", async () => {
@@ -182,18 +144,28 @@ describe("NotifyService", () => {
         upsertNotificationPreferences: upsert,
       });
       const svc = new NotifyService(db, mockPush());
-      const app = buildApp(svc);
 
-      const res = await app.request("/preferences", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ interval_seconds: 600, wake_hour: 9 }),
-      });
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.interval_seconds).toBe(600);
-      expect(body.wake_hour).toBe(9);
+      const result = await svc.updatePreferences("user-1", { interval_seconds: 600, wake_hour: 9 });
+      expect(result.interval_seconds).toBe(600);
+      expect(result.wake_hour).toBe(9);
       expect(upsert).toHaveBeenCalled();
+    });
+  });
+
+  describe("trackOpened", () => {
+    it("tracks notification opened", async () => {
+      const db = mockNotifyDB();
+      const svc = new NotifyService(db, mockPush());
+      await svc.trackOpened("user-1", "notif-123");
+      expect(db.trackNotificationOpened).toHaveBeenCalledWith("user-1", "notif-123");
+    });
+
+    it("does not throw when DB fails", async () => {
+      const db = mockNotifyDB({
+        trackNotificationOpened: vi.fn().mockRejectedValue(new Error("db down")),
+      });
+      const svc = new NotifyService(db, mockPush());
+      await expect(svc.trackOpened("user-1", "notif-123")).resolves.toBeUndefined();
     });
   });
 });

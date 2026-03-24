@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
-import { Hono } from "hono";
 import { ChatService, type ChatDB, type ChatMessage } from "../chat/index.js";
 import type { PushProvider } from "../push/index.js";
+import { ValidationError, ServiceError } from "../errors/index.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -47,85 +47,49 @@ function defaultCfg() {
   };
 }
 
-function buildApp(svc: ChatService) {
-  const a = new Hono();
-  // Simulate auth middleware setting userId
-  a.use("*", async (c, next) => {
-    c.set("userId", "user-1");
-    await next();
-  });
-  a.get("/chat", svc.handleGetChat);
-  a.post("/chat", svc.handleSendChat);
-  a.get("/chat/unread", svc.handleUnreadCount);
-  a.get("/admin/chat/:user_id", svc.handleAdminGetChat);
-  a.post("/admin/chat/:user_id", svc.handleAdminReplyChat);
-  return a;
-}
-
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 describe("ChatService", () => {
-  // ── handleSendChat ───────────────────────────────────────────────────────
+  // ── sendMessage ───────────────────────────────────────────────────────
 
-  describe("handleSendChat", () => {
-    it("returns 400 when message is missing", async () => {
-      const db = mockDB();
-      const svc = new ChatService(db, mockPush(), defaultCfg());
-      const app = buildApp(svc);
-
-      const res = await app.request("/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-
-      expect(res.status).toBe(400);
-      const json = await res.json();
-      expect(json.error).toMatch(/message/i);
+  describe("sendMessage", () => {
+    it("throws ValidationError when message is missing", async () => {
+      const svc = new ChatService(mockDB(), mockPush(), defaultCfg());
+      await expect(svc.sendMessage("user-1", "")).rejects.toThrow(ValidationError);
+      await expect(svc.sendMessage("user-1", "")).rejects.toThrow(/message/i);
     });
 
-    it("returns 400 when message exceeds 5000 chars", async () => {
-      const db = mockDB();
-      const svc = new ChatService(db, mockPush(), defaultCfg());
-      const app = buildApp(svc);
-
-      const res = await app.request("/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: "x".repeat(5001) }),
-      });
-
-      expect(res.status).toBe(400);
-      const json = await res.json();
-      expect(json.error).toMatch(/too long/i);
+    it("throws ValidationError when message exceeds 5000 chars", async () => {
+      const svc = new ChatService(mockDB(), mockPush(), defaultCfg());
+      await expect(svc.sendMessage("user-1", "x".repeat(5001))).rejects.toThrow(/too long/i);
     });
 
-    it("sends message successfully and returns 201", async () => {
+    it("sends message successfully", async () => {
       const sentMsg = makeChatMessage({ id: 42, message: "hi there" });
       const db = mockDB({
         sendChatMessage: vi.fn().mockResolvedValue(sentMsg),
       });
       const svc = new ChatService(db, mockPush(), defaultCfg());
-      const app = buildApp(svc);
 
-      const res = await app.request("/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: "hi there" }),
-      });
-
-      expect(res.status).toBe(201);
-      const json = await res.json();
-      expect(json.status).toBe("sent");
+      const result = await svc.sendMessage("user-1", "hi there");
+      expect(result.status).toBe("sent");
+      expect(result.id).toBe(42);
       expect(db.sendChatMessage).toHaveBeenCalledWith("user-1", "user", "hi there", "text");
+    });
+
+    it("throws ServiceError when DB fails", async () => {
+      const db = mockDB({
+        sendChatMessage: vi.fn().mockRejectedValue(new Error("db down")),
+      });
+      const svc = new ChatService(db, mockPush(), defaultCfg());
+      await expect(svc.sendMessage("user-1", "hello")).rejects.toThrow(ServiceError);
     });
   });
 
-  // ── handleGetChat ────────────────────────────────────────────────────────
+  // ── getMessages ────────────────────────────────────────────────────────
 
-  describe("handleGetChat", () => {
+  describe("getMessages", () => {
     it("returns messages with pagination (has_more = true when more exist)", async () => {
-      // Default limit is 50; service fetches limit+1 to detect more
       const msgs = Array.from({ length: 51 }, (_, i) =>
         makeChatMessage({ id: i + 1, message: `msg-${i}` })
       );
@@ -133,14 +97,10 @@ describe("ChatService", () => {
         getChatMessages: vi.fn().mockResolvedValue(msgs),
       });
       const svc = new ChatService(db, mockPush(), defaultCfg());
-      const app = buildApp(svc);
 
-      const res = await app.request("/chat");
-      expect(res.status).toBe(200);
-
-      const json = await res.json();
-      expect(json.has_more).toBe(true);
-      expect(json.messages).toHaveLength(50);
+      const result = await svc.getMessages("user-1");
+      expect(result.has_more).toBe(true);
+      expect(result.messages).toHaveLength(50);
     });
 
     it("returns has_more = false when fewer messages than limit", async () => {
@@ -149,12 +109,10 @@ describe("ChatService", () => {
         getChatMessages: vi.fn().mockResolvedValue(msgs),
       });
       const svc = new ChatService(db, mockPush(), defaultCfg());
-      const app = buildApp(svc);
 
-      const res = await app.request("/chat");
-      const json = await res.json();
-      expect(json.has_more).toBe(false);
-      expect(json.messages).toHaveLength(2);
+      const result = await svc.getMessages("user-1");
+      expect(result.has_more).toBe(false);
+      expect(result.messages).toHaveLength(2);
     });
 
     it("uses since_id parameter when provided", async () => {
@@ -162,41 +120,31 @@ describe("ChatService", () => {
         getChatMessagesSince: vi.fn().mockResolvedValue([makeChatMessage({ id: 5 })]),
       });
       const svc = new ChatService(db, mockPush(), defaultCfg());
-      const app = buildApp(svc);
 
-      const res = await app.request("/chat?since_id=4");
-      expect(res.status).toBe(200);
-
-      const json = await res.json();
-      expect(json.has_more).toBe(false);
+      const result = await svc.getMessages("user-1", { since_id: 4 });
+      expect(result.has_more).toBe(false);
       expect(db.getChatMessagesSince).toHaveBeenCalledWith("user-1", 4);
     });
 
-    it("returns 400 for invalid since_id", async () => {
-      const db = mockDB();
-      const svc = new ChatService(db, mockPush(), defaultCfg());
-      const app = buildApp(svc);
-
-      const res = await app.request("/chat?since_id=abc");
-      expect(res.status).toBe(400);
+    it("throws ValidationError for invalid since_id", async () => {
+      const svc = new ChatService(mockDB(), mockPush(), defaultCfg());
+      await expect(
+        svc.getMessages("user-1", { since_id: NaN })
+      ).rejects.toThrow(ValidationError);
     });
   });
 
-  // ── handleUnreadCount ────────────────────────────────────────────────────
+  // ── getUnreadCount ────────────────────────────────────────────────────
 
-  describe("handleUnreadCount", () => {
+  describe("getUnreadCount", () => {
     it("returns the unread count", async () => {
       const db = mockDB({
         getUnreadCount: vi.fn().mockResolvedValue(7),
       });
       const svc = new ChatService(db, mockPush(), defaultCfg());
-      const app = buildApp(svc);
 
-      const res = await app.request("/chat/unread");
-      expect(res.status).toBe(200);
-
-      const json = await res.json();
-      expect(json.count).toBe(7);
+      const result = await svc.getUnreadCount("user-1");
+      expect(result.count).toBe(7);
     });
 
     it("returns 0 when getUnreadCount throws", async () => {
@@ -204,56 +152,25 @@ describe("ChatService", () => {
         getUnreadCount: vi.fn().mockRejectedValue(new Error("db error")),
       });
       const svc = new ChatService(db, mockPush(), defaultCfg());
-      const app = buildApp(svc);
 
-      const res = await app.request("/chat/unread");
-      expect(res.status).toBe(200);
-
-      const json = await res.json();
-      expect(json.count).toBe(0);
+      const result = await svc.getUnreadCount("user-1");
+      expect(result.count).toBe(0);
     });
   });
 
-  // ── handleAdminReplyChat ─────────────────────────────────────────────────
+  // ── adminReply ─────────────────────────────────────────────────────────
 
-  describe("handleAdminReplyChat", () => {
-    it("returns 400 when user_id param is missing", async () => {
-      const db = mockDB();
-      const svc = new ChatService(db, mockPush(), defaultCfg());
-
-      // Build a separate app where the route has no :user_id param
-      const a = new Hono();
-      a.use("*", async (c, next) => {
-        c.set("userId", "admin-1");
-        await next();
-      });
-      a.post("/admin/chat", svc.handleAdminReplyChat);
-
-      const res = await a.request("/admin/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: "reply" }),
-      });
-
-      expect(res.status).toBe(400);
-      const json = await res.json();
-      expect(json.error).toMatch(/user_id/i);
+  describe("adminReply", () => {
+    it("throws ValidationError when user_id is empty", async () => {
+      const svc = new ChatService(mockDB(), mockPush(), defaultCfg());
+      await expect(svc.adminReply("", "reply")).rejects.toThrow(/user_id/i);
     });
 
-    it("returns 400 when message exceeds 5000 chars", async () => {
-      const db = mockDB();
-      const svc = new ChatService(db, mockPush(), defaultCfg());
-      const app = buildApp(svc);
-
-      const res = await app.request("/admin/chat/user-1", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: "x".repeat(5001) }),
-      });
-
-      expect(res.status).toBe(400);
-      const json = await res.json();
-      expect(json.error).toMatch(/too long/i);
+    it("throws ValidationError when message exceeds 5000 chars", async () => {
+      const svc = new ChatService(mockDB(), mockPush(), defaultCfg());
+      await expect(
+        svc.adminReply("user-1", "x".repeat(5001))
+      ).rejects.toThrow(/too long/i);
     });
 
     it("sends push notification when user has no active WebSocket", async () => {
@@ -264,15 +181,10 @@ describe("ChatService", () => {
       });
       const push = mockPush();
       const svc = new ChatService(db, push, defaultCfg());
-      const app = buildApp(svc);
 
-      const res = await app.request("/admin/chat/user-1", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: "we can help" }),
-      });
+      const result = await svc.adminReply("user-1", "we can help");
+      expect(result.status).toBe("sent");
 
-      expect(res.status).toBe(201);
       // Wait for async push to complete
       await vi.waitFor(() => {
         expect(push.sendWithData).toHaveBeenCalledWith(
@@ -297,35 +209,21 @@ describe("ChatService", () => {
       const fakeWs = { send: vi.fn(), close: vi.fn() } as unknown as WebSocket;
       svc.handleWSConnection(fakeWs, "user-1", "user");
 
-      const app = buildApp(svc);
-
-      const res = await app.request("/admin/chat/user-1", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: "hi" }),
-      });
-
-      expect(res.status).toBe(201);
+      const result = await svc.adminReply("user-1", "hi");
+      expect(result.status).toBe("sent");
       expect(push.sendWithData).not.toHaveBeenCalled();
     });
 
-    it("sends reply successfully and returns 201", async () => {
+    it("sends reply successfully", async () => {
       const sentMsg = makeChatMessage({ id: 12, sender: "admin", message: "got it" });
       const db = mockDB({
         sendChatMessage: vi.fn().mockResolvedValue(sentMsg),
       });
       const svc = new ChatService(db, mockPush(), defaultCfg());
-      const app = buildApp(svc);
 
-      const res = await app.request("/admin/chat/user-1", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: "got it" }),
-      });
-
-      expect(res.status).toBe(201);
-      const json = await res.json();
-      expect(json.status).toBe("sent");
+      const result = await svc.adminReply("user-1", "got it");
+      expect(result.status).toBe("sent");
+      expect(result.id).toBe(12);
       expect(db.sendChatMessage).toHaveBeenCalledWith("user-1", "admin", "got it", "text");
     });
   });

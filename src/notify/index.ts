@@ -1,6 +1,6 @@
-import type { Context } from "hono";
 import type { PushProvider } from "../push/index.js";
 import { randomUUID } from "node:crypto";
+import { ValidationError, ServiceError } from "../errors/index.js";
 
 // ── Types & Interfaces ──────────────────────────────────────────────────────
 
@@ -63,124 +63,112 @@ export class NotifyService {
     private push: PushProvider
   ) {}
 
-  /** POST /api/v1/notifications/devices */
-  handleRegisterDevice = async (c: Context) => {
-    const userId = c.get("userId") as string;
-    const body = await c.req.json<{
-      token?: string;
+  async registerDevice(
+    userId: string,
+    input: {
+      token: string;
       platform?: string;
       device_model?: string;
       os_version?: string;
       app_version?: string;
       apns_topic?: string;
-    }>();
-
-    if (!body.token) return c.json({ error: "token is required" }, 400);
-    if (body.token.length > 200) return c.json({ error: "token too long" }, 400);
-    if (body.device_model && body.device_model.length > 100) return c.json({ error: "device_model too long" }, 400);
-    if (body.os_version && body.os_version.length > 50) return c.json({ error: "os_version too long" }, 400);
-    if (body.app_version && body.app_version.length > 50) return c.json({ error: "app_version too long" }, 400);
+    }
+  ): Promise<{ status: string }> {
+    if (!input.token) throw new ValidationError("token is required");
+    if (input.token.length > 200) throw new ValidationError("token too long");
+    if (input.device_model && input.device_model.length > 100) throw new ValidationError("device_model too long");
+    if (input.os_version && input.os_version.length > 50) throw new ValidationError("os_version too long");
+    if (input.app_version && input.app_version.length > 50) throw new ValidationError("app_version too long");
 
     const dt: DeviceToken = {
       id: randomUUID(),
       user_id: userId,
-      token: body.token,
-      platform: body.platform ?? "ios",
-      device_model: body.device_model ?? "",
-      os_version: body.os_version ?? "",
-      app_version: body.app_version ?? "",
+      token: input.token,
+      platform: input.platform ?? "ios",
+      device_model: input.device_model ?? "",
+      os_version: input.os_version ?? "",
+      app_version: input.app_version ?? "",
       enabled: true,
       last_seen_at: new Date(),
-      apns_topic: body.apns_topic,
+      apns_topic: input.apns_topic,
     };
 
     try {
       await this.db.upsertDeviceToken(dt);
       await this.db.ensureNotificationPreferences(userId);
     } catch {
-      return c.json({ error: "failed to register device" }, 500);
+      throw new ServiceError("INTERNAL", "failed to register device");
     }
 
     console.log(`[device] registered ${dt.platform} for ${userId} (${dt.device_model} ${dt.os_version} app=${dt.app_version})`);
-    return c.json({ status: "registered" }, 201);
-  };
+    return { status: "registered" };
+  }
 
-  /** DELETE /api/v1/notifications/devices */
-  handleDisableDevice = async (c: Context) => {
-    const userId = c.get("userId") as string;
-    const body = await c.req.json<{ token?: string }>();
-    if (!body.token) return c.json({ error: "token is required" }, 400);
+  async disableDevice(userId: string, token: string): Promise<{ status: string }> {
+    if (!token) throw new ValidationError("token is required");
 
     try {
-      await this.db.disableDeviceToken(userId, body.token);
+      await this.db.disableDeviceToken(userId, token);
     } catch {
-      return c.json({ error: "failed to disable device" }, 500);
+      throw new ServiceError("INTERNAL", "failed to disable device");
     }
-    return c.json({ status: "disabled" });
-  };
+    return { status: "disabled" };
+  }
 
-  /** GET /api/v1/notifications/preferences */
-  handleGetPrefs = async (c: Context) => {
-    const userId = c.get("userId") as string;
+  async getPreferences(userId: string): Promise<NotificationPreferences> {
     try {
-      const prefs = await this.db.getNotificationPreferences(userId);
-      return c.json(prefs);
+      return await this.db.getNotificationPreferences(userId);
     } catch {
-      return c.json({ error: "failed to get preferences" }, 500);
+      throw new ServiceError("INTERNAL", "failed to get preferences");
     }
-  };
+  }
 
-  /** PUT /api/v1/notifications/preferences */
-  handleUpdatePrefs = async (c: Context) => {
-    const userId = c.get("userId") as string;
-    const body = await c.req.json<Partial<{
+  async updatePreferences(
+    userId: string,
+    input: Partial<{
       push_enabled: boolean;
       interval_seconds: number;
       wake_hour: number;
       sleep_hour: number;
       timezone: string;
       stop_after_goal: boolean;
-    }>>();
-
+    }>
+  ): Promise<NotificationPreferences> {
     let existing: NotificationPreferences;
     try {
       existing = await this.db.getNotificationPreferences(userId);
     } catch {
-      return c.json({ error: "failed to get preferences" }, 500);
+      throw new ServiceError("INTERNAL", "failed to get preferences");
     }
 
     const prefs = { ...existing };
-    if (body.push_enabled !== undefined) prefs.push_enabled = body.push_enabled;
-    if (body.interval_seconds !== undefined) {
-      if (body.interval_seconds < 300) return c.json({ error: "interval_seconds must be at least 300 (5 minutes)" }, 400);
-      prefs.interval_seconds = body.interval_seconds;
+    if (input.push_enabled !== undefined) prefs.push_enabled = input.push_enabled;
+    if (input.interval_seconds !== undefined) {
+      if (input.interval_seconds < 300) throw new ValidationError("interval_seconds must be at least 300 (5 minutes)");
+      prefs.interval_seconds = input.interval_seconds;
     }
-    if (body.wake_hour !== undefined) {
-      if (body.wake_hour < 0 || body.wake_hour > 23) return c.json({ error: "wake_hour must be 0-23" }, 400);
-      prefs.wake_hour = body.wake_hour;
+    if (input.wake_hour !== undefined) {
+      if (input.wake_hour < 0 || input.wake_hour > 23) throw new ValidationError("wake_hour must be 0-23");
+      prefs.wake_hour = input.wake_hour;
     }
-    if (body.sleep_hour !== undefined) {
-      if (body.sleep_hour < 0 || body.sleep_hour > 23) return c.json({ error: "sleep_hour must be 0-23" }, 400);
-      prefs.sleep_hour = body.sleep_hour;
+    if (input.sleep_hour !== undefined) {
+      if (input.sleep_hour < 0 || input.sleep_hour > 23) throw new ValidationError("sleep_hour must be 0-23");
+      prefs.sleep_hour = input.sleep_hour;
     }
-    if (body.timezone !== undefined) prefs.timezone = body.timezone;
-    if (body.stop_after_goal !== undefined) prefs.stop_after_goal = body.stop_after_goal;
+    if (input.timezone !== undefined) prefs.timezone = input.timezone;
+    if (input.stop_after_goal !== undefined) prefs.stop_after_goal = input.stop_after_goal;
 
     try {
       await this.db.upsertNotificationPreferences(prefs);
     } catch {
-      return c.json({ error: "failed to update preferences" }, 500);
+      throw new ServiceError("INTERNAL", "failed to update preferences");
     }
-    return c.json(prefs);
-  };
+    return prefs;
+  }
 
-  /** POST /api/v1/notifications/opened */
-  handleNotificationOpened = async (c: Context) => {
-    const userId = c.get("userId") as string;
-    const body = await c.req.json<{ notification_id?: string }>();
-    await this.db.trackNotificationOpened(userId, body.notification_id ?? "").catch(() => {});
-    return c.json({ status: "recorded" });
-  };
+  async trackOpened(userId: string, notificationId?: string): Promise<void> {
+    await this.db.trackNotificationOpened(userId, notificationId ?? "").catch(() => {});
+  }
 }
 
 // ── Notification Scheduler ──────────────────────────────────────────────────
@@ -304,10 +292,6 @@ export function getHourInTimezone(date: Date, timezone: string): number {
   }
 }
 
-/**
- * Example tick function. Replace with your app-specific notification logic.
- * This exists as a reference — do not use in production without customizing the copy.
- */
 /**
  * Example tick function. Replace with your app-specific notification logic.
  * Uses sendRich when available to pass per-device APNs topic (for watchOS support).

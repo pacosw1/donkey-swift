@@ -1,3 +1,4 @@
+import { ValidationError } from "../errors/index.js";
 function toDate(d) {
     return d instanceof Date ? d : new Date(d);
 }
@@ -138,31 +139,19 @@ export class LifecycleService {
         }
         return candidate;
     }
-    /** GET /api/v1/user/lifecycle */
-    handleGetLifecycle = async (c) => {
-        const userId = c.get("userId");
-        try {
-            const es = await this.evaluateUser(userId);
-            return c.json(es);
+    /** Acknowledge a lifecycle prompt (shown, accepted, or dismissed). */
+    async ackPrompt(userId, promptType, action) {
+        if (!promptType || !action) {
+            throw new ValidationError("prompt_type and action are required");
         }
-        catch {
-            return c.json({ error: "failed to evaluate lifecycle" }, 500);
-        }
-    };
-    /** POST /api/v1/user/lifecycle/ack */
-    handleAckPrompt = async (c) => {
-        const userId = c.get("userId");
-        const body = await c.req.json();
-        if (!body.prompt_type || !body.action)
-            return c.json({ error: "prompt_type and action are required" }, 400);
         const validActions = new Set(["shown", "accepted", "dismissed"]);
-        if (!validActions.has(body.action))
-            return c.json({ error: "action must be one of: shown, accepted, dismissed" }, 400);
-        const event = `lifecycle_prompt_${body.action}`;
-        const metadata = JSON.stringify({ prompt_type: body.prompt_type });
+        if (!validActions.has(action)) {
+            throw new ValidationError("action must be one of: shown, accepted, dismissed");
+        }
+        const event = `lifecycle_prompt_${action}`;
+        const metadata = JSON.stringify({ prompt_type: promptType });
         await this.db.recordPrompt(userId, event, metadata).catch(() => { });
-        return c.json({ status: "ok" });
-    };
+    }
     /** Evaluate users and send winback pushes to at-risk/dormant/churned users. */
     async evaluateNotifications(userIds) {
         for (const userId of userIds) {

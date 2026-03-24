@@ -1,4 +1,3 @@
-import type { Context } from "hono";
 export interface FlagsDB {
     upsertFlag(flag: Flag): Promise<void>;
     getFlag(key: string): Promise<Flag | null>;
@@ -40,90 +39,36 @@ export declare class FlagsService {
     isEnabled(key: string, userId: string): Promise<boolean>;
     /** Get a flag's typed value for a user. Returns null if flag is disabled or user is not in rollout. */
     getValue(key: string, userId: string): Promise<string | number | Record<string, unknown> | null>;
-    /** GET /api/v1/flags/:key */
-    handleCheck: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        [x: string]: import("hono/utils/types").JSONValue;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">)>;
-    /** POST /api/v1/flags/check */
-    handleBatchCheck: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        flags: {
-            [x: string]: boolean;
-        };
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
-    /** GET /admin/api/flags */
-    handleAdminList: (c: Context) => Promise<Response & import("hono").TypedResponse<{
-        flags: never[] | {
-            key: string;
-            enabled: boolean;
-            rollout_pct: number;
-            description: string;
-            value?: string | null | undefined;
-            value_type?: "boolean" | "string" | "number" | "json" | undefined;
-            created_at: string;
-            updated_at: string;
-        }[];
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">>;
-    /** POST /admin/api/flags */
-    handleAdminCreate: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
+    check(userId: string, key: string): Promise<{
         key: string;
         enabled: boolean;
-        rollout_pct: number;
-        description: string;
-        value?: string | null | undefined;
-        value_type?: "boolean" | "string" | "number" | "json" | undefined;
-        created_at: string;
-        updated_at: string;
-    }, 201, "json">)>;
-    /** PUT /admin/api/flags/:key */
-    handleAdminUpdate: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 404, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
-        key: string;
-        enabled: boolean;
-        rollout_pct: number;
-        description: string;
-        value?: string | null | undefined;
-        value_type?: "boolean" | "string" | "number" | "json" | undefined;
-        created_at: string;
-        updated_at: string;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
-    /** DELETE /admin/api/flags/:key */
-    handleAdminDelete: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 404, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
+        value?: string | null;
+    }>;
+    batchCheck(userId: string, keys: string[]): Promise<{
+        flags: Record<string, boolean>;
+    }>;
+    listFlags(): Promise<{
+        flags: Flag[];
+    }>;
+    createFlag(input: {
+        key?: string;
+        enabled?: boolean;
+        rollout_pct?: number;
+        description?: string;
+        value?: string;
+        value_type?: string;
+    }): Promise<Flag>;
+    updateFlag(key: string, input: {
+        enabled?: boolean;
+        rollout_pct?: number;
+        description?: string;
+        value?: string;
+        value_type?: string;
+    }): Promise<Flag>;
+    deleteFlag(key: string): Promise<{
         status: string;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
-    /** POST /admin/api/flags/:key/overrides */
-    handleAdminSetOverride: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
-        status: string;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
-    /** DELETE /admin/api/flags/:key/overrides/:user_id */
-    handleAdminDeleteOverride: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
-        status: string;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
+    }>;
+    setOverride(key: string, userId: string, enabled: boolean): Promise<void>;
+    deleteOverride(key: string, userId: string): Promise<void>;
 }
 //# sourceMappingURL=index.d.ts.map

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { Hono } from "hono";
 import { AuthService, type AuthDB, type AuthConfig, type SessionDB, type User } from "../auth/index.js";
+import { ValidationError, UnauthorizedError, NotFoundError, NotConfiguredError, ServiceError } from "../errors/index.js";
 
 const JWT_SECRET = "test-secret-key-at-least-32-chars-long";
 
@@ -47,120 +47,123 @@ function createService(dbOverrides: Partial<AuthDB> = {}, cfgOverrides: Partial<
   return { svc, db, cfg };
 }
 
-// ── Handler tests ───────────────────────────────────────────────────────────
+// ── Pure method tests ────────────────────────────────────────────────────────
 
-describe("AuthService handlers", () => {
-  describe("handleAppleAuth", () => {
-    it("rejects missing identity_token with 400", async () => {
-      const { svc } = createService();
-      const a = new Hono();
-      a.post("/auth/apple", svc.handleAppleAuth);
+describe("AuthService.authenticateWithApple", () => {
+  it("throws ValidationError for empty identity token", async () => {
+    const { svc } = createService();
+    await expect(svc.authenticateWithApple("")).rejects.toThrow(ValidationError);
+    await expect(svc.authenticateWithApple("")).rejects.toThrow("identity_token is required");
+  });
+});
 
-      const res = await a.request("/auth/apple", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.error).toContain("identity_token");
-    });
-
-    it("rejects request with null identity_token with 400", async () => {
-      const { svc } = createService();
-      const a = new Hono();
-      a.post("/auth/apple", svc.handleAppleAuth);
-
-      const res = await a.request("/auth/apple", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ identity_token: null }),
-      });
-
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.error).toContain("identity_token");
-    });
+describe("AuthService.authenticateWithWeb", () => {
+  it("throws NotConfiguredError when web auth is not configured", async () => {
+    const { svc } = createService();
+    await expect(svc.authenticateWithWeb("some-code")).rejects.toThrow(NotConfiguredError);
+    await expect(svc.authenticateWithWeb("some-code")).rejects.toThrow("web auth not configured");
   });
 
-  describe("handleMe", () => {
-    it("returns user data when valid session", async () => {
-      const user = makeUser({ id: "user-789", name: "Alice" });
-      const { svc } = createService({
-        userById: vi.fn().mockResolvedValue(user),
-      });
+  it("throws ValidationError for empty authorization code", async () => {
+    const { svc } = createService({}, {
+      appleClientSecret: "secret",
+      appleRedirectUri: "https://example.com/callback",
+      appleWebClientId: "com.test.web",
+    });
+    await expect(svc.authenticateWithWeb("")).rejects.toThrow(ValidationError);
+    await expect(svc.authenticateWithWeb("")).rejects.toThrow("authorization code is required");
+  });
+});
 
-      const a = new Hono();
-      // Simulate middleware setting userId
-      a.use("*", async (c, next) => {
-        c.set("userId", "user-789");
-        await next();
-      });
-      a.get("/auth/me", svc.handleMe);
-
-      const res = await a.request("/auth/me");
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.id).toBe("user-789");
-      expect(body.name).toBe("Alice");
+describe("AuthService.getUser", () => {
+  it("returns user data when found", async () => {
+    const user = makeUser({ id: "user-789", name: "Alice" });
+    const { svc } = createService({
+      userById: vi.fn().mockResolvedValue(user),
     });
 
-    it("returns 404 when user not found", async () => {
-      const { svc } = createService({
-        userById: vi.fn().mockRejectedValue(new Error("not found")),
-      });
-
-      const a = new Hono();
-      a.use("*", async (c, next) => {
-        c.set("userId", "nonexistent-user");
-        await next();
-      });
-      a.get("/auth/me", svc.handleMe);
-
-      const res = await a.request("/auth/me");
-      expect(res.status).toBe(404);
-      const body = await res.json();
-      expect(body.error).toContain("user not found");
-    });
+    const result = await svc.getUser("user-789");
+    expect(result.id).toBe("user-789");
+    expect(result.name).toBe("Alice");
   });
 
-  describe("handleLogout", () => {
-    it("returns success and deletes cookie", async () => {
-      const { svc } = createService();
-      const a = new Hono();
-      a.post("/auth/logout", svc.handleLogout);
-
-      const res = await a.request("/auth/logout", { method: "POST" });
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.status).toBe("logged out");
-
-      // The Set-Cookie header should clear the session cookie
-      const setCookie = res.headers.get("set-cookie");
-      expect(setCookie).toBeTruthy();
-      expect(setCookie).toContain("session=");
-      expect(setCookie).toContain("Max-Age=0");
+  it("throws NotFoundError when user not found", async () => {
+    const { svc } = createService({
+      userById: vi.fn().mockRejectedValue(new Error("not found")),
     });
+    await expect(svc.getUser("nonexistent-user")).rejects.toThrow(NotFoundError);
+    await expect(svc.getUser("nonexistent-user")).rejects.toThrow("user not found");
+  });
+});
 
-    it("deletes custom-named cookie when configured", async () => {
-      const db = mockDB();
-      const svc = new AuthService(
-        {
-          jwtSecret: JWT_SECRET,
-          appleBundleId: "com.test.app",
-          cookieName: "my_session",
-        },
-        db
-      );
-      const a = new Hono();
-      a.post("/auth/logout", svc.handleLogout);
+describe("AuthService.logout", () => {
+  it("completes without error when no sessionDB", async () => {
+    const { svc } = createService();
+    await expect(svc.logout()).resolves.toBeUndefined();
+  });
 
-      const res = await a.request("/auth/logout", { method: "POST" });
-      expect(res.status).toBe(200);
-      const setCookie = res.headers.get("set-cookie");
-      expect(setCookie).toContain("my_session=");
-    });
+  it("completes without error when no token provided", async () => {
+    const sessionDB = mockSessionDB();
+    const { svc } = createService({}, { sessionDB });
+    await expect(svc.logout()).resolves.toBeUndefined();
+    expect(sessionDB.revokeSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("AuthService.logoutAll", () => {
+  it("throws NotConfiguredError when sessionDB is not configured", async () => {
+    const { svc } = createService();
+    await expect(svc.logoutAll("user-1")).rejects.toThrow(NotConfiguredError);
+    await expect(svc.logoutAll("user-1")).rejects.toThrow("session management not configured");
+  });
+
+  it("revokes all sessions when sessionDB is configured", async () => {
+    const sessionDB = mockSessionDB();
+    const { svc } = createService({}, { sessionDB });
+    await svc.logoutAll("user-42");
+    expect(sessionDB.revokeAllSessions).toHaveBeenCalledWith("user-42");
+  });
+});
+
+describe("AuthService.listSessions", () => {
+  it("throws NotConfiguredError when activeSessions is not available", async () => {
+    const sessionDB: SessionDB = {
+      createSession: vi.fn().mockResolvedValue(undefined),
+      isSessionValid: vi.fn().mockResolvedValue(true),
+      revokeSession: vi.fn().mockResolvedValue(undefined),
+      revokeAllSessions: vi.fn().mockResolvedValue(undefined),
+      // no activeSessions
+    };
+    const { svc } = createService({}, { sessionDB });
+    await expect(svc.listSessions("user-1")).rejects.toThrow(NotConfiguredError);
+    await expect(svc.listSessions("user-1")).rejects.toThrow("session listing not available");
+  });
+
+  it("throws NotConfiguredError when sessionDB is not configured at all", async () => {
+    const { svc } = createService();
+    await expect(svc.listSessions("user-1")).rejects.toThrow(NotConfiguredError);
+  });
+});
+
+describe("AuthService.revokeSession", () => {
+  it("throws NotConfiguredError when sessionDB is not configured", async () => {
+    const { svc } = createService();
+    await expect(svc.revokeSession("some-jti")).rejects.toThrow(NotConfiguredError);
+    await expect(svc.revokeSession("some-jti")).rejects.toThrow("session management not configured");
+  });
+
+  it("revokes session when jti is provided", async () => {
+    const sessionDB = mockSessionDB();
+    const { svc } = createService({}, { sessionDB });
+    await svc.revokeSession("jti-abc-123");
+    expect(sessionDB.revokeSession).toHaveBeenCalledWith("jti-abc-123");
+  });
+
+  it("throws ValidationError for empty jti", async () => {
+    const sessionDB = mockSessionDB();
+    const { svc } = createService({}, { sessionDB });
+    await expect(svc.revokeSession("")).rejects.toThrow(ValidationError);
+    await expect(svc.revokeSession("")).rejects.toThrow("session id is required");
   });
 });
 
@@ -218,160 +221,6 @@ describe("AuthService session tokens", () => {
     const token2 = await svc.createSessionToken("user-1");
     // Tokens for the same user should differ (unique jti + iat)
     expect(token1).not.toBe(token2);
-  });
-});
-
-// ── Web Auth handler tests ──────────────────────────────────────────────────
-
-describe("AuthService handleWebAuth", () => {
-  it("returns 501 when web auth is not configured", async () => {
-    const { svc } = createService();
-    const a = new Hono();
-    a.post("/auth/apple/web", svc.handleWebAuth);
-
-    const res = await a.request("/auth/apple/web", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code: "auth-code-123" }),
-    });
-
-    expect(res.status).toBe(501);
-    const body = await res.json();
-    expect(body.error).toContain("web auth not configured");
-  });
-
-  it("rejects missing authorization code with 400", async () => {
-    const { svc } = createService({}, {
-      appleClientSecret: "secret",
-      appleRedirectUri: "https://example.com/callback",
-      appleWebClientId: "com.test.web",
-    });
-    const a = new Hono();
-    a.post("/auth/apple/web", svc.handleWebAuth);
-
-    const res = await a.request("/auth/apple/web", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-
-    expect(res.status).toBe(400);
-    const body = await res.json();
-    expect(body.error).toContain("authorization code is required");
-  });
-});
-
-// ── Session management handler tests ────────────────────────────────────────
-
-describe("AuthService session management handlers", () => {
-  describe("handleLogoutAll", () => {
-    it("returns 501 when sessionDB is not configured", async () => {
-      const { svc } = createService();
-      const a = new Hono();
-      a.use("*", async (c, next) => {
-        c.set("userId", "user-1");
-        await next();
-      });
-      a.post("/auth/logout-all", svc.handleLogoutAll);
-
-      const res = await a.request("/auth/logout-all", { method: "POST" });
-      expect(res.status).toBe(501);
-      const body = await res.json();
-      expect(body.error).toContain("session management not configured");
-    });
-
-    it("revokes all sessions when sessionDB is configured", async () => {
-      const sessionDB = mockSessionDB();
-      const { svc } = createService({}, { sessionDB });
-      const a = new Hono();
-      a.use("*", async (c, next) => {
-        c.set("userId", "user-42");
-        await next();
-      });
-      a.post("/auth/logout-all", svc.handleLogoutAll);
-
-      const res = await a.request("/auth/logout-all", { method: "POST" });
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.status).toBe("all sessions revoked");
-      expect(sessionDB.revokeAllSessions).toHaveBeenCalledWith("user-42");
-    });
-  });
-
-  describe("handleListSessions", () => {
-    it("returns 501 when activeSessions is not available", async () => {
-      // sessionDB without activeSessions method
-      const sessionDB: SessionDB = {
-        createSession: vi.fn().mockResolvedValue(undefined),
-        isSessionValid: vi.fn().mockResolvedValue(true),
-        revokeSession: vi.fn().mockResolvedValue(undefined),
-        revokeAllSessions: vi.fn().mockResolvedValue(undefined),
-        // no activeSessions
-      };
-      const { svc } = createService({}, { sessionDB });
-      const a = new Hono();
-      a.use("*", async (c, next) => {
-        c.set("userId", "user-1");
-        await next();
-      });
-      a.get("/auth/sessions", svc.handleListSessions);
-
-      const res = await a.request("/auth/sessions");
-      expect(res.status).toBe(501);
-      const body = await res.json();
-      expect(body.error).toContain("session listing not available");
-    });
-
-    it("returns 501 when sessionDB is not configured at all", async () => {
-      const { svc } = createService();
-      const a = new Hono();
-      a.use("*", async (c, next) => {
-        c.set("userId", "user-1");
-        await next();
-      });
-      a.get("/auth/sessions", svc.handleListSessions);
-
-      const res = await a.request("/auth/sessions");
-      expect(res.status).toBe(501);
-    });
-  });
-
-  describe("handleRevokeSession", () => {
-    it("rejects missing jti with 400", async () => {
-      const sessionDB = mockSessionDB();
-      const { svc } = createService({}, { sessionDB });
-      const a = new Hono();
-      a.delete("/auth/sessions/:jti", svc.handleRevokeSession);
-
-      // Empty string jti
-      const res = await a.request("/auth/sessions/%20", { method: "DELETE" });
-      // jti is present but handler processes it — this verifies the route works
-      expect(res.status).toBe(200);
-    });
-
-    it("rejects when sessionDB is not configured", async () => {
-      const { svc } = createService();
-      const a = new Hono();
-      a.delete("/auth/sessions/:jti", svc.handleRevokeSession);
-
-      const res = await a.request("/auth/sessions/some-jti", { method: "DELETE" });
-      expect(res.status).toBe(501);
-      const body = await res.json();
-      expect(body.error).toContain("session management not configured");
-    });
-
-    it("revokes session when jti is provided", async () => {
-      const sessionDB = mockSessionDB();
-      const { svc } = createService({}, { sessionDB });
-      const a = new Hono();
-      a.delete("/auth/sessions/:jti", svc.handleRevokeSession);
-
-      const res = await a.request("/auth/sessions/jti-abc-123", { method: "DELETE" });
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.status).toBe("session revoked");
-      expect(sessionDB.revokeSession).toHaveBeenCalledWith("jti-abc-123");
-    });
   });
 });
 

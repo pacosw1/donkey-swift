@@ -1,4 +1,4 @@
-import type { Context } from "hono";
+import { ValidationError, NotFoundError, ServiceError } from "../errors/index.js";
 
 // ── Types & Interfaces ──────────────────────────────────────────────────────
 
@@ -119,29 +119,23 @@ export class FlagsService {
     }
   }
 
-  /** GET /api/v1/flags/:key */
-  handleCheck = async (c: Context) => {
-    const userId = c.get("userId") as string;
-    const key = c.req.param("key");
-    if (!key) return c.json({ error: "flag key is required" }, 400);
+  async check(userId: string, key: string): Promise<{ key: string; enabled: boolean; value?: string | null }> {
+    if (!key) throw new ValidationError("flag key is required");
 
     const enabled = await this.isEnabled(key, userId);
     const flag = await this.getCachedFlag(key);
-    const result: Record<string, unknown> = { key, enabled };
+    const result: { key: string; enabled: boolean; value?: string | null } = { key, enabled };
     if (flag?.value && enabled) result.value = flag.value;
-    return c.json(result);
-  };
+    return result;
+  }
 
-  /** POST /api/v1/flags/check */
-  handleBatchCheck = async (c: Context) => {
-    const userId = c.get("userId") as string;
-    const body = await c.req.json<{ keys?: string[] }>();
-    if (!body.keys?.length) return c.json({ error: "keys array is required" }, 400);
-    if (body.keys.length > 100) return c.json({ error: "maximum 100 keys per batch" }, 400);
+  async batchCheck(userId: string, keys: string[]): Promise<{ flags: Record<string, boolean> }> {
+    if (!keys?.length) throw new ValidationError("keys array is required");
+    if (keys.length > 100) throw new ValidationError("maximum 100 keys per batch");
 
     // Warm cache with bulk fetch if supported
     if (this.db.getFlags && this.cacheTtlMs > 0) {
-      const uncached = body.keys.filter((k) => {
+      const uncached = keys.filter((k) => {
         const entry = this.cache.get(k);
         return !entry || Date.now() >= entry.expiresAt;
       });
@@ -161,40 +155,37 @@ export class FlagsService {
     }
 
     const result: Record<string, boolean> = {};
-    for (const key of body.keys) {
+    for (const key of keys) {
       result[key] = await this.isEnabled(key, userId);
     }
-    return c.json({ flags: result });
-  };
+    return { flags: result };
+  }
 
-  /** GET /admin/api/flags */
-  handleAdminList = async (c: Context) => {
+  async listFlags(): Promise<{ flags: Flag[] }> {
     const flags = await this.db.listFlags().catch(() => []);
-    return c.json({ flags });
-  };
+    return { flags };
+  }
 
-  /** POST /admin/api/flags */
-  handleAdminCreate = async (c: Context) => {
-    const body = await c.req.json<{
-      key?: string;
-      enabled?: boolean;
-      rollout_pct?: number;
-      description?: string;
-      value?: string;
-      value_type?: string;
-    }>();
-    if (!body.key) return c.json({ error: "key is required" }, 400);
-    if (body.rollout_pct !== undefined && (body.rollout_pct < 0 || body.rollout_pct > 100)) {
-      return c.json({ error: "rollout_pct must be 0-100" }, 400);
+  async createFlag(input: {
+    key?: string;
+    enabled?: boolean;
+    rollout_pct?: number;
+    description?: string;
+    value?: string;
+    value_type?: string;
+  }): Promise<Flag> {
+    if (!input.key) throw new ValidationError("key is required");
+    if (input.rollout_pct !== undefined && (input.rollout_pct < 0 || input.rollout_pct > 100)) {
+      throw new ValidationError("rollout_pct must be 0-100");
     }
 
     const flag: Flag = {
-      key: body.key,
-      enabled: body.enabled ?? true,
-      rollout_pct: body.rollout_pct ?? 100,
-      description: body.description ?? "",
-      value: body.value ?? null,
-      value_type: (body.value_type as Flag["value_type"]) ?? "boolean",
+      key: input.key,
+      enabled: input.enabled ?? true,
+      rollout_pct: input.rollout_pct ?? 100,
+      description: input.description ?? "",
+      value: input.value ?? null,
+      value_type: (input.value_type as Flag["value_type"]) ?? "boolean",
       created_at: new Date(),
       updated_at: new Date(),
     };
@@ -202,93 +193,78 @@ export class FlagsService {
     try {
       await this.db.upsertFlag(flag);
     } catch {
-      return c.json({ error: "failed to create flag" }, 500);
+      throw new ServiceError("INTERNAL", "failed to create flag");
     }
     this.invalidate(flag.key);
-    return c.json(flag, 201);
-  };
+    return flag;
+  }
 
-  /** PUT /admin/api/flags/:key */
-  handleAdminUpdate = async (c: Context) => {
-    const key = c.req.param("key");
-    if (!key) return c.json({ error: "flag key is required" }, 400);
+  async updateFlag(key: string, input: {
+    enabled?: boolean;
+    rollout_pct?: number;
+    description?: string;
+    value?: string;
+    value_type?: string;
+  }): Promise<Flag> {
+    if (!key) throw new ValidationError("flag key is required");
 
     const existing = await this.db.getFlag(key);
-    if (!existing) return c.json({ error: "flag not found" }, 404);
+    if (!existing) throw new NotFoundError("flag not found");
 
-    const body = await c.req.json<{
-      enabled?: boolean;
-      rollout_pct?: number;
-      description?: string;
-      value?: string;
-      value_type?: string;
-    }>();
-
-    if (body.rollout_pct !== undefined && (body.rollout_pct < 0 || body.rollout_pct > 100)) {
-      return c.json({ error: "rollout_pct must be 0-100" }, 400);
+    if (input.rollout_pct !== undefined && (input.rollout_pct < 0 || input.rollout_pct > 100)) {
+      throw new ValidationError("rollout_pct must be 0-100");
     }
 
-    if (body.enabled !== undefined) existing.enabled = body.enabled;
-    if (body.rollout_pct !== undefined) existing.rollout_pct = body.rollout_pct;
-    if (body.description !== undefined) existing.description = body.description;
-    if (body.value !== undefined) existing.value = body.value;
-    if (body.value_type !== undefined) existing.value_type = body.value_type as Flag["value_type"];
+    if (input.enabled !== undefined) existing.enabled = input.enabled;
+    if (input.rollout_pct !== undefined) existing.rollout_pct = input.rollout_pct;
+    if (input.description !== undefined) existing.description = input.description;
+    if (input.value !== undefined) existing.value = input.value;
+    if (input.value_type !== undefined) existing.value_type = input.value_type as Flag["value_type"];
     existing.updated_at = new Date();
 
     try {
       await this.db.upsertFlag(existing);
     } catch {
-      return c.json({ error: "failed to update flag" }, 500);
+      throw new ServiceError("INTERNAL", "failed to update flag");
     }
     this.invalidate(key);
-    return c.json(existing);
-  };
+    return existing;
+  }
 
-  /** DELETE /admin/api/flags/:key */
-  handleAdminDelete = async (c: Context) => {
-    const key = c.req.param("key");
-    if (!key) return c.json({ error: "flag key is required" }, 400);
+  async deleteFlag(key: string): Promise<{ status: string }> {
+    if (!key) throw new ValidationError("flag key is required");
 
     const existing = await this.db.getFlag(key);
-    if (!existing) return c.json({ error: "flag not found" }, 404);
+    if (!existing) throw new NotFoundError("flag not found");
 
     try {
       await this.db.deleteFlag(key);
     } catch {
-      return c.json({ error: "failed to delete flag" }, 500);
+      throw new ServiceError("INTERNAL", "failed to delete flag");
     }
     this.invalidate(key);
-    return c.json({ status: "deleted" });
-  };
+    return { status: "deleted" };
+  }
 
-  /** POST /admin/api/flags/:key/overrides */
-  handleAdminSetOverride = async (c: Context) => {
-    const key = c.req.param("key");
-    if (!key) return c.json({ error: "flag key is required" }, 400);
-
-    const body = await c.req.json<{ user_id?: string; enabled?: boolean }>();
-    if (!body.user_id) return c.json({ error: "user_id is required" }, 400);
-    if (body.enabled === undefined) return c.json({ error: "enabled is required" }, 400);
+  async setOverride(key: string, userId: string, enabled: boolean): Promise<void> {
+    if (!key) throw new ValidationError("flag key is required");
+    if (!userId) throw new ValidationError("user_id is required");
+    if (enabled === undefined) throw new ValidationError("enabled is required");
 
     try {
-      await this.db.setUserOverride(key, body.user_id, body.enabled);
+      await this.db.setUserOverride(key, userId, enabled);
     } catch {
-      return c.json({ error: "failed to set override" }, 500);
+      throw new ServiceError("INTERNAL", "failed to set override");
     }
-    return c.json({ status: "override set" });
-  };
+  }
 
-  /** DELETE /admin/api/flags/:key/overrides/:user_id */
-  handleAdminDeleteOverride = async (c: Context) => {
-    const key = c.req.param("key");
-    const userId = c.req.param("user_id");
-    if (!key || !userId) return c.json({ error: "key and user_id are required" }, 400);
+  async deleteOverride(key: string, userId: string): Promise<void> {
+    if (!key || !userId) throw new ValidationError("key and user_id are required");
 
     try {
       await this.db.deleteUserOverride(key, userId);
     } catch {
-      return c.json({ error: "failed to delete override" }, 500);
+      throw new ServiceError("INTERNAL", "failed to delete override");
     }
-    return c.json({ status: "override deleted" });
-  };
+  }
 }

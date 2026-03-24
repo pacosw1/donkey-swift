@@ -1,3 +1,4 @@
+import { ServiceError } from "../errors/index.js";
 // ── Service ─────────────────────────────────────────────────────────────────
 export class AccountService {
     cfg;
@@ -10,9 +11,8 @@ export class AccountService {
         this.appCleanup = opts?.cleanup;
         this.appExport = opts?.exporter;
     }
-    /** DELETE /api/v1/account */
-    handleDeleteAccount = async (c) => {
-        const userId = c.get("userId");
+    /** Delete a user account and all associated data. */
+    async deleteAccount(userId) {
         const email = await this.db.getUserEmail(userId).catch(() => "");
         const deleteAll = async () => {
             // 1. App-specific tables first
@@ -33,41 +33,38 @@ export class AccountService {
             }
         }
         catch {
-            return c.json({ error: "failed to delete account" }, 500);
+            throw new ServiceError("INTERNAL", "failed to delete account");
         }
         // Callback (outside transaction — fire and forget)
         if (this.cfg.onDelete && email)
             this.cfg.onDelete(userId, email);
-        return c.json({ status: "deleted" });
-    };
-    /** POST /api/v1/account/anonymize */
-    handleAnonymizeAccount = async (c) => {
-        const userId = c.get("userId");
+        return { status: "deleted" };
+    }
+    /** Anonymize a user account (remove PII but keep the record). */
+    async anonymizeAccount(userId) {
         try {
             await this.db.anonymizeUser(userId);
         }
         catch {
-            return c.json({ error: "failed to anonymize account" }, 500);
+            throw new ServiceError("INTERNAL", "failed to anonymize account");
         }
-        return c.json({ status: "anonymized" });
-    };
-    /** GET /api/v1/account/export */
-    handleExportData = async (c) => {
-        const userId = c.get("userId");
+        return { status: "anonymized" };
+    }
+    /** Export all user data. */
+    async exportData(userId) {
         let exportData;
         try {
             exportData = await this.db.exportUserData(userId);
         }
         catch {
-            return c.json({ error: "failed to export data" }, 500);
+            throw new ServiceError("INTERNAL", "failed to export data");
         }
         if (this.appExport) {
             const appData = await this.appExport.exportAppData(userId).catch(() => null);
             if (appData)
                 exportData.app_data = appData;
         }
-        c.header("Content-Disposition", "attachment; filename=account-data.json");
-        return c.json(exportData);
-    };
+        return exportData;
+    }
 }
 //# sourceMappingURL=index.js.map

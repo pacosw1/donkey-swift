@@ -1,4 +1,6 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
+import { setCookie, deleteCookie } from "hono/cookie";
 import { requireAuth, requireAdmin, cors, rateLimit, requestLog, requestId, version, RateLimiter } from "../middleware/index.js";
 import type { AuthConfig, AdminConfig } from "../middleware/index.js";
 import type { AuthService } from "../auth/index.js";
@@ -19,6 +21,7 @@ import type { Scheduler } from "../scheduler/index.js";
 import type { NotifyScheduler } from "../notify/index.js";
 import type { LogBuffer } from "../logbuf/index.js";
 import { handleAdminLogs } from "../logbuf/index.js";
+import { ServiceError, errorToStatus } from "../errors/index.js";
 import { openApiSpec } from "./openapi.js";
 
 // ── App Config ──────────────────────────────────────────────────────────────
@@ -58,6 +61,14 @@ export interface AppConfig {
   /** Maximum request body size in bytes (default: 1MB). */
   maxBodySize?: number;
 
+  // Cookie settings for auth session management
+  /** Cookie name for session token (default: "session"). */
+  cookieName?: string;
+  /** Whether to set Secure flag on cookies (default: false). */
+  secureCookies?: boolean;
+  /** Session expiry in seconds for cookie maxAge (default: 7 days). */
+  sessionExpirySec?: number;
+
   // Optional references for centralized shutdown
   scheduler?: Scheduler;
   notifyScheduler?: NotifyScheduler;
@@ -72,6 +83,26 @@ function bodyLimit(maxBytes: number) {
       return c.json({ error: `request body too large (max ${Math.floor(maxBytes / 1024)}KB)` }, 413);
     }
     await next();
+  };
+}
+
+// ── Service-to-Handler Wrapper ───────────────────────────────────────────────
+
+/**
+ * Wraps an async function that may throw ServiceError into a Hono handler.
+ * Maps ServiceError codes to HTTP status codes; unknown errors become 500.
+ */
+function wrap(fn: (c: Context) => Promise<unknown>): (c: Context) => Promise<Response> {
+  return async (c: Context) => {
+    try {
+      const result = await fn(c);
+      return c.json(result);
+    } catch (err) {
+      if (err instanceof ServiceError) {
+        return c.json({ error: err.message }, errorToStatus(err) as 400);
+      }
+      return c.json({ error: "internal error" }, 500);
+    }
   };
 }
 
@@ -124,13 +155,54 @@ export function createApp(cfg: AppConfig): AppResources {
   app.get("/ready", cfg.health.handleReady);
 
   // ── Auth ──
-  app.post(`${api}/auth/apple`, rateLimit(authRl), cfg.auth.handleAppleAuth);
-  app.post(`${api}/auth/apple/web`, rateLimit(authRl), cfg.auth.handleWebAuth);
-  app.get(`${api}/auth/me`, auth, cfg.auth.handleMe);
-  app.post(`${api}/auth/logout`, auth, rateLimit(writeRl), cfg.auth.handleLogout);
-  app.post(`${api}/auth/logout-all`, auth, rateLimit(sensitiveRl), cfg.auth.handleLogoutAll);
-  app.get(`${api}/auth/sessions`, auth, cfg.auth.handleListSessions);
-  app.delete(`${api}/auth/sessions/:jti`, auth, rateLimit(writeRl), cfg.auth.handleRevokeSession);
+  const au = cfg.auth;
+  const cookieName = cfg.cookieName ?? "session";
+  const secureCookie = cfg.secureCookies ?? false;
+  const sessionExpiry = cfg.sessionExpirySec ?? 7 * 24 * 60 * 60;
+
+  app.post(`${api}/auth/apple`, rateLimit(authRl), wrap(async (c) => {
+    const body = await c.req.json<{ identity_token?: string; name?: string }>();
+    const result = await au.authenticateWithApple(body.identity_token ?? "", body.name);
+    setCookie(c, cookieName, result.token, {
+      path: "/", httpOnly: true, secure: secureCookie, sameSite: "Lax", maxAge: sessionExpiry,
+    });
+    return result;
+  }));
+  app.post(`${api}/auth/apple/web`, rateLimit(authRl), wrap(async (c) => {
+    const body = await c.req.json<{ code?: string; name?: string }>();
+    const result = await au.authenticateWithWeb(body.code ?? "", body.name);
+    setCookie(c, cookieName, result.token, {
+      path: "/", httpOnly: true, secure: true, sameSite: "Lax", maxAge: sessionExpiry,
+    });
+    return result;
+  }));
+  app.get(`${api}/auth/me`, auth, wrap(async (c) => {
+    return au.getUser(c.get("userId") as string);
+  }));
+  app.post(`${api}/auth/logout`, auth, rateLimit(writeRl), wrap(async (c) => {
+    const authHeader = c.req.header("authorization");
+    let token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
+    if (!token) {
+      const { getCookie } = await import("hono/cookie");
+      token = getCookie(c, cookieName);
+    }
+    await au.logout(token);
+    deleteCookie(c, cookieName, { path: "/" });
+    return { status: "logged out" };
+  }));
+  app.post(`${api}/auth/logout-all`, auth, rateLimit(sensitiveRl), wrap(async (c) => {
+    await au.logoutAll(c.get("userId") as string);
+    deleteCookie(c, cookieName, { path: "/" });
+    return { status: "all sessions revoked" };
+  }));
+  app.get(`${api}/auth/sessions`, auth, wrap(async (c) => {
+    const sessions = await au.listSessions(c.get("userId") as string);
+    return { sessions };
+  }));
+  app.delete(`${api}/auth/sessions/:jti`, auth, rateLimit(writeRl), wrap(async (c) => {
+    await au.revokeSession(c.req.param("jti"));
+    return { status: "session revoked" };
+  }));
 
   // ── Engage ──
   if (cfg.engage) {
@@ -195,16 +267,37 @@ export function createApp(cfg: AppConfig): AppResources {
   // ── Lifecycle ──
   if (cfg.lifecycle) {
     const l = cfg.lifecycle;
-    app.get(`${api}/user/lifecycle`, auth, l.handleGetLifecycle);
-    app.post(`${api}/user/lifecycle/ack`, auth, rateLimit(writeRl), l.handleAckPrompt);
+    app.get(`${api}/user/lifecycle`, auth, wrap(async (c) => {
+      return l.evaluateUser(c.get("userId") as string);
+    }));
+    app.post(`${api}/user/lifecycle/ack`, auth, rateLimit(writeRl), wrap(async (c) => {
+      const body = await c.req.json<{ prompt_type?: string; action?: string }>();
+      await l.ackPrompt(c.get("userId") as string, body.prompt_type ?? "", body.action ?? "");
+      return { status: "ok" };
+    }));
   }
 
   // ── Account ──
   if (cfg.account) {
-    const a = cfg.account;
-    app.delete(`${api}/account`, auth, rateLimit(sensitiveRl), a.handleDeleteAccount);
-    app.post(`${api}/account/anonymize`, auth, rateLimit(sensitiveRl), a.handleAnonymizeAccount);
-    app.get(`${api}/account/export`, auth, rateLimit(sensitiveRl), a.handleExportData);
+    const ac = cfg.account;
+    app.delete(`${api}/account`, auth, rateLimit(sensitiveRl), wrap(async (c) => {
+      return ac.deleteAccount(c.get("userId") as string);
+    }));
+    app.post(`${api}/account/anonymize`, auth, rateLimit(sensitiveRl), wrap(async (c) => {
+      return ac.anonymizeAccount(c.get("userId") as string);
+    }));
+    app.get(`${api}/account/export`, auth, rateLimit(sensitiveRl), async (c) => {
+      try {
+        const data = await ac.exportData(c.get("userId") as string);
+        c.header("Content-Disposition", "attachment; filename=account-data.json");
+        return c.json(data);
+      } catch (err) {
+        if (err instanceof ServiceError) {
+          return c.json({ error: err.message }, errorToStatus(err) as 400);
+        }
+        return c.json({ error: "internal error" }, 500);
+      }
+    });
   }
 
   // ── Attest ──

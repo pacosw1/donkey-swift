@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { Hono } from "hono";
 import {
   SyncService,
   type SyncDB,
   type EntityHandler,
   type BatchItem,
 } from "../sync/index.js";
+import { ValidationError, ServiceError } from "../errors/index.js";
 
 function mockSyncDB(overrides: Partial<SyncDB> = {}): SyncDB {
   return {
@@ -25,18 +25,6 @@ function mockEntityHandler(overrides: Partial<EntityHandler> = {}): EntityHandle
   };
 }
 
-function buildApp(svc: SyncService): Hono {
-  const a = new Hono();
-  a.use("*", async (c, next) => {
-    c.set("userId", "user-1");
-    await next();
-  });
-  a.get("/sync/changes", svc.handleSyncChanges);
-  a.post("/sync/batch", svc.handleSyncBatch);
-  a.delete("/sync/:entity_type/:id", svc.handleSyncDelete);
-  return a;
-}
-
 describe("SyncService", () => {
   let svc: SyncService;
 
@@ -44,58 +32,44 @@ describe("SyncService", () => {
     svc?.close();
   });
 
-  describe("handleSyncChanges", () => {
+  describe("getChanges", () => {
     it("returns changes with synced_at timestamp", async () => {
       const db = mockSyncDB();
       const handler = mockEntityHandler({
         changedSince: vi.fn().mockResolvedValue({ habits: [{ id: "h1" }] }),
       });
       svc = new SyncService(db, handler);
-      const app = buildApp(svc);
 
-      const res = await app.request("/sync/changes?since=2025-01-01T00:00:00Z");
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.synced_at).toBeDefined();
-      expect(body.deleted).toEqual([]);
-      expect(body.habits).toEqual([{ id: "h1" }]);
+      const result = await svc.getChanges("user-1", { since: "2025-01-01T00:00:00Z" });
+      expect(result.synced_at).toBeDefined();
+      expect(result.deleted).toEqual([]);
+      expect(result.habits).toEqual([{ id: "h1" }]);
     });
 
-    it("rejects invalid since format (400)", async () => {
+    it("rejects invalid since format", async () => {
       const db = mockSyncDB();
       const handler = mockEntityHandler();
       svc = new SyncService(db, handler);
-      const app = buildApp(svc);
 
-      const res = await app.request("/sync/changes?since=not-a-date");
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.error).toMatch(/invalid.*since/i);
+      await expect(svc.getChanges("user-1", { since: "not-a-date" }))
+        .rejects.toThrow(ValidationError);
     });
   });
 
-  describe("handleSyncBatch", () => {
-    it("rejects empty items (400)", async () => {
+  describe("syncBatch", () => {
+    it("rejects empty items", async () => {
       const db = mockSyncDB();
       const handler = mockEntityHandler();
       svc = new SyncService(db, handler);
-      const app = buildApp(svc);
 
-      const res = await app.request("/sync/batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: [] }),
-      });
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.error).toMatch(/items/i);
+      await expect(svc.syncBatch("user-1", []))
+        .rejects.toThrow(ValidationError);
     });
 
-    it("rejects > 500 items (400)", async () => {
+    it("rejects > 500 items", async () => {
       const db = mockSyncDB();
       const handler = mockEntityHandler();
       svc = new SyncService(db, handler);
-      const app = buildApp(svc);
 
       const items: BatchItem[] = Array.from({ length: 501 }, (_, i) => ({
         client_id: `c-${i}`,
@@ -104,45 +78,24 @@ describe("SyncService", () => {
         fields: {},
       }));
 
-      const res = await app.request("/sync/batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items }),
-      });
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.error).toMatch(/500/);
+      await expect(svc.syncBatch("user-1", items))
+        .rejects.toThrow(/500/);
     });
 
     it("validates items have client_id and entity_type", async () => {
       const db = mockSyncDB();
       const handler = mockEntityHandler();
       svc = new SyncService(db, handler);
-      const app = buildApp(svc);
 
       // Missing client_id
-      const res1 = await app.request("/sync/batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          items: [{ entity_type: "habit", version: 1, fields: {} }],
-        }),
-      });
-      expect(res1.status).toBe(400);
-      const body1 = await res1.json();
-      expect(body1.error).toMatch(/client_id/i);
+      await expect(
+        svc.syncBatch("user-1", [{ entity_type: "habit", version: 1, fields: {} } as BatchItem])
+      ).rejects.toThrow(/client_id/i);
 
       // Missing entity_type
-      const res2 = await app.request("/sync/batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          items: [{ client_id: "c-1", version: 1, fields: {} }],
-        }),
-      });
-      expect(res2.status).toBe(400);
-      const body2 = await res2.json();
-      expect(body2.error).toMatch(/entity_type/i);
+      await expect(
+        svc.syncBatch("user-1", [{ client_id: "c-1", version: 1, fields: {} } as BatchItem])
+      ).rejects.toThrow(/entity_type/i);
     });
 
     it("returns cached response for same idempotency key", async () => {
@@ -153,52 +106,28 @@ describe("SyncService", () => {
       const db = mockSyncDB();
       const handler = mockEntityHandler({ batchUpsert });
       svc = new SyncService(db, handler);
-      const app = buildApp(svc);
 
-      const reqOpts = {
-        method: "POST" as const,
-        headers: {
-          "Content-Type": "application/json",
-          "x-idempotency-key": "idem-123",
-        },
-        body: JSON.stringify({
-          items: [{ client_id: "c-1", entity_type: "habit", version: 1, fields: {} }],
-        }),
-      };
+      const items: BatchItem[] = [{ client_id: "c-1", entity_type: "habit", version: 1, fields: {} }];
 
-      const res1 = await app.request("/sync/batch", reqOpts);
-      expect(res1.status).toBe(200);
-      const body1 = await res1.json();
+      const result1 = await svc.syncBatch("user-1", items, { idempotencyKey: "idem-123" });
+      const result2 = await svc.syncBatch("user-1", items, { idempotencyKey: "idem-123" });
 
-      // Second request with same key should return cached response
-      const res2 = await app.request("/sync/batch", {
-        ...reqOpts,
-        body: JSON.stringify({
-          items: [{ client_id: "c-1", entity_type: "habit", version: 1, fields: {} }],
-        }),
-      });
-      expect(res2.status).toBe(200);
-      const body2 = await res2.json();
-
-      expect(body1).toEqual(body2);
+      expect(result1).toEqual(result2);
       // batchUpsert should only be called once (second request uses cache)
       expect(batchUpsert).toHaveBeenCalledTimes(1);
     });
   });
 
-  describe("handleSyncDelete", () => {
+  describe("deleteEntity", () => {
     it("deletes entity and records tombstone", async () => {
       const deleteFn = vi.fn().mockResolvedValue(undefined);
       const recordTombstone = vi.fn().mockResolvedValue(undefined);
       const db = mockSyncDB({ recordTombstone });
       const handler = mockEntityHandler({ delete: deleteFn });
       svc = new SyncService(db, handler);
-      const app = buildApp(svc);
 
-      const res = await app.request("/sync/habit/h-1", { method: "DELETE" });
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.status).toBe("deleted");
+      const result = await svc.deleteEntity("user-1", "habit", "h-1");
+      expect(result.status).toBe("deleted");
 
       expect(deleteFn).toHaveBeenCalledWith("user-1", "habit", "h-1");
       expect(recordTombstone).toHaveBeenCalledWith("user-1", "habit", "h-1");
@@ -224,20 +153,13 @@ describe("SyncService", () => {
         deviceTokens: { enabledTokensForUser },
         pushDebounceMs: 2500,
       });
-      const app = buildApp(svc);
 
-      const req = {
-        method: "POST" as const,
-        headers: { "Content-Type": "application/json", "x-device-id": "device-A" },
-        body: JSON.stringify({
-          items: [{ client_id: "c-1", entity_type: "habit", version: 1, fields: {} }],
-        }),
-      };
+      const items: BatchItem[] = [{ client_id: "c-1", entity_type: "habit", version: 1, fields: {} }];
 
       // 3 rapid syncs within debounce window
-      await app.request("/sync/batch", req);
-      await app.request("/sync/batch", req);
-      await app.request("/sync/batch", req);
+      await svc.syncBatch("user-1", items, { deviceId: "device-A" });
+      await svc.syncBatch("user-1", items, { deviceId: "device-A" });
+      await svc.syncBatch("user-1", items, { deviceId: "device-A" });
 
       // No push yet — still within debounce window
       expect(sendSilent).not.toHaveBeenCalled();
@@ -269,15 +191,9 @@ describe("SyncService", () => {
         deviceTokens: { enabledTokensForUser },
         pushDebounceMs: 0,
       });
-      const app = buildApp(svc);
 
-      await app.request("/sync/batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-device-id": "device-A" },
-        body: JSON.stringify({
-          items: [{ client_id: "c-1", entity_type: "habit", version: 1, fields: {} }],
-        }),
-      });
+      const items: BatchItem[] = [{ client_id: "c-1", entity_type: "habit", version: 1, fields: {} }];
+      await svc.syncBatch("user-1", items, { deviceId: "device-A" });
 
       // Wait for the fire-and-forget promise
       await new Promise((r) => setTimeout(r, 50));
@@ -304,15 +220,9 @@ describe("SyncService", () => {
         deviceTokens: { enabledTokensForUser },
         pushDebounceMs: 2000,
       });
-      const app = buildApp(svc);
 
-      await app.request("/sync/batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-device-id": "device-A" },
-        body: JSON.stringify({
-          items: [{ client_id: "c-1", entity_type: "habit", version: 1, fields: {} }],
-        }),
-      });
+      const items: BatchItem[] = [{ client_id: "c-1", entity_type: "habit", version: 1, fields: {} }];
+      await svc.syncBatch("user-1", items, { deviceId: "device-A" });
 
       await vi.advanceTimersByTimeAsync(2500);
 

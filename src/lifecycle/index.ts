@@ -1,5 +1,5 @@
-import type { Context } from "hono";
 import type { PushProvider } from "../push/index.js";
+import { ValidationError } from "../errors/index.js";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -240,31 +240,20 @@ export class LifecycleService {
     return candidate;
   }
 
-  /** GET /api/v1/user/lifecycle */
-  handleGetLifecycle = async (c: Context) => {
-    const userId = c.get("userId") as string;
-    try {
-      const es = await this.evaluateUser(userId);
-      return c.json(es);
-    } catch {
-      return c.json({ error: "failed to evaluate lifecycle" }, 500);
+  /** Acknowledge a lifecycle prompt (shown, accepted, or dismissed). */
+  async ackPrompt(userId: string, promptType: string, action: string): Promise<void> {
+    if (!promptType || !action) {
+      throw new ValidationError("prompt_type and action are required");
     }
-  };
-
-  /** POST /api/v1/user/lifecycle/ack */
-  handleAckPrompt = async (c: Context) => {
-    const userId = c.get("userId") as string;
-    const body = await c.req.json<{ prompt_type?: string; action?: string }>();
-
-    if (!body.prompt_type || !body.action) return c.json({ error: "prompt_type and action are required" }, 400);
     const validActions = new Set(["shown", "accepted", "dismissed"]);
-    if (!validActions.has(body.action)) return c.json({ error: "action must be one of: shown, accepted, dismissed" }, 400);
+    if (!validActions.has(action)) {
+      throw new ValidationError("action must be one of: shown, accepted, dismissed");
+    }
 
-    const event = `lifecycle_prompt_${body.action}`;
-    const metadata = JSON.stringify({ prompt_type: body.prompt_type });
+    const event = `lifecycle_prompt_${action}`;
+    const metadata = JSON.stringify({ prompt_type: promptType });
     await this.db.recordPrompt(userId, event, metadata).catch(() => {});
-    return c.json({ status: "ok" });
-  };
+  }
 
   /** Evaluate users and send winback pushes to at-risk/dormant/churned users. */
   async evaluateNotifications(userIds: string[]): Promise<void> {

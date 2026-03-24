@@ -1,4 +1,4 @@
-import type { Context } from "hono";
+import { ValidationError, ServiceError } from "../errors/index.js";
 
 // ── Types & Interfaces ──────────────────────────────────────────────────────
 
@@ -73,20 +73,19 @@ export class EngageService {
     this.eventHooks.push(hook);
   }
 
-  /** POST /api/v1/events */
-  handleTrackEvents = async (c: Context) => {
-    const userId = c.get("userId") as string;
-    const body = await c.req.json<{ events?: Array<{ event: string; metadata?: unknown; timestamp?: string }> }>();
+  async trackEvents(
+    userId: string,
+    events: Array<{ event: string; metadata?: unknown; timestamp?: string }>
+  ): Promise<{ tracked: number }> {
+    if (!events?.length) throw new ValidationError("events array is required");
+    if (events.length > 100) throw new ValidationError("maximum 100 events per batch");
 
-    if (!body.events?.length) return c.json({ error: "events array is required" }, 400);
-    if (body.events.length > 100) return c.json({ error: "maximum 100 events per batch" }, 400);
-
-    for (const e of body.events) {
-      if (!e.event || typeof e.event !== "string") return c.json({ error: "each event must have a string 'event' field" }, 400);
-      if (e.event.length > 200) return c.json({ error: "event name too long (max 200 chars)" }, 400);
+    for (const e of events) {
+      if (!e.event || typeof e.event !== "string") throw new ValidationError("each event must have a string 'event' field");
+      if (e.event.length > 200) throw new ValidationError("event name too long (max 200 chars)");
     }
 
-    const dbEvents: EventInput[] = body.events.map((e) => ({
+    const dbEvents: EventInput[] = events.map((e) => ({
       event: e.event,
       metadata: e.metadata ? JSON.stringify(e.metadata).slice(0, 10_000) : "{}",
       timestamp: e.timestamp ?? "",
@@ -95,92 +94,89 @@ export class EngageService {
     try {
       await this.db.trackEvents(userId, dbEvents);
     } catch {
-      return c.json({ error: "failed to track events" }, 500);
+      throw new ServiceError("INTERNAL", "failed to track events");
     }
 
     for (const hook of this.eventHooks) hook(userId, dbEvents);
-    return c.json({ tracked: dbEvents.length });
-  };
+    return { tracked: dbEvents.length };
+  }
 
-  /** PUT /api/v1/subscription */
-  handleUpdateSubscription = async (c: Context) => {
-    const userId = c.get("userId") as string;
-    const body = await c.req.json<{
+  async updateSubscription(
+    userId: string,
+    input: {
       product_id?: string;
       status?: string;
       expires_at?: string;
       original_transaction_id?: string;
       price_cents?: number;
       currency_code?: string;
-    }>();
-
-    if (!body.status) return c.json({ error: "status is required" }, 400);
-    if (!VALID_STATUSES.has(body.status)) {
-      return c.json({ error: "status must be one of: active, expired, cancelled, trial, free" }, 400);
+    }
+  ): Promise<UserSubscription | { status: string }> {
+    if (!input.status) throw new ValidationError("status is required");
+    if (!VALID_STATUSES.has(input.status)) {
+      throw new ValidationError("status must be one of: active, expired, cancelled, trial, free");
     }
 
-    const expiresAt = body.expires_at ? new Date(body.expires_at) : null;
+    const expiresAt = input.expires_at ? new Date(input.expires_at) : null;
 
     try {
-      await this.db.updateSubscription(userId, body.product_id ?? "", body.status, expiresAt);
+      await this.db.updateSubscription(userId, input.product_id ?? "", input.status, expiresAt);
     } catch {
-      return c.json({ error: "failed to update subscription" }, 500);
+      throw new ServiceError("INTERNAL", "failed to update subscription");
     }
 
-    if (body.original_transaction_id || (body.price_cents && body.price_cents > 0)) {
+    if (input.original_transaction_id || (input.price_cents && input.price_cents > 0)) {
       await this.db.updateSubscriptionDetails(
         userId,
-        body.original_transaction_id ?? "",
-        body.price_cents ?? 0,
-        body.currency_code ?? "USD"
+        input.original_transaction_id ?? "",
+        input.price_cents ?? 0,
+        input.currency_code ?? "USD"
       ).catch(() => {});
     }
 
     const sub = await this.db.getSubscription(userId).catch(() => null);
-    return c.json(sub ?? { status: "updated" });
-  };
+    return sub ?? { status: "updated" };
+  }
 
-  /** POST /api/v1/sessions */
-  handleSessionReport = async (c: Context) => {
-    const userId = c.get("userId") as string;
-    const body = await c.req.json<{
-      session_id?: string;
-      action?: string;
+  async reportSession(
+    userId: string,
+    input: {
+      session_id: string;
+      action: "start" | "end";
       app_version?: string;
       os_version?: string;
       country?: string;
       duration_s?: number;
-    }>();
-
-    if (!body.session_id || !body.action) return c.json({ error: "session_id and action required" }, 400);
-    if (body.session_id.length > 100) return c.json({ error: "session_id too long" }, 400);
-    if (body.action !== "start" && body.action !== "end") return c.json({ error: "action must be 'start' or 'end'" }, 400);
-    if (body.action === "end" && body.duration_s !== undefined && (body.duration_s < 0 || body.duration_s > 86400)) {
-      return c.json({ error: "duration_s must be 0-86400" }, 400);
+    }
+  ): Promise<{ status: string }> {
+    if (!input.session_id || !input.action) throw new ValidationError("session_id and action required");
+    if (input.session_id.length > 100) throw new ValidationError("session_id too long");
+    if (input.action !== "start" && input.action !== "end") throw new ValidationError("action must be 'start' or 'end'");
+    if (input.action === "end" && input.duration_s !== undefined && (input.duration_s < 0 || input.duration_s > 86400)) {
+      throw new ValidationError("duration_s must be 0-86400");
     }
 
     try {
-      if (body.action === "start") {
-        await this.db.startSession(userId, body.session_id, body.app_version ?? "", body.os_version ?? "", body.country ?? "");
+      if (input.action === "start") {
+        await this.db.startSession(userId, input.session_id, input.app_version ?? "", input.os_version ?? "", input.country ?? "");
       } else {
-        await this.db.endSession(userId, body.session_id, body.duration_s ?? 0);
+        await this.db.endSession(userId, input.session_id, input.duration_s ?? 0);
       }
     } catch {
-      return c.json({ error: `failed to ${body.action} session` }, 500);
+      throw new ServiceError("INTERNAL", `failed to ${input.action} session`);
     }
 
-    return c.json({ status: "ok" });
-  };
+    return { status: "ok" };
+  }
 
-  /** GET /api/v1/user/eligibility */
-  handleGetEligibility = async (c: Context) => {
-    const userId = c.get("userId") as string;
-
+  async getEligibility(
+    userId: string
+  ): Promise<{ paywall_trigger: string | null; days_active: number; total_logs: number; streak: number; is_pro: boolean }> {
     let data: EngagementData;
     try {
       data = await this.db.getEngagementData(userId);
     } catch {
-      return c.json({ error: "failed to get engagement data" }, 500);
+      throw new ServiceError("INTERNAL", "failed to get engagement data");
     }
 
     const isPro = await this.db.isProUser(userId).catch(() => false);
@@ -191,34 +187,33 @@ export class EngageService {
       if (trigger) paywallTrigger = trigger;
     }
 
-    return c.json({
+    return {
       paywall_trigger: paywallTrigger,
       days_active: data.days_active,
       total_logs: data.total_logs,
       streak: data.current_streak,
       is_pro: isPro,
-    });
-  };
+    };
+  }
 
-  /** POST /api/v1/feedback */
-  handleSubmitFeedback = async (c: Context) => {
-    const userId = c.get("userId") as string;
-    const body = await c.req.json<{ type?: string; message?: string; app_version?: string }>();
+  async submitFeedback(
+    userId: string,
+    input: { type?: string; message: string; app_version?: string }
+  ): Promise<{ status: string }> {
+    if (!input.message) throw new ValidationError("message is required");
+    if (input.message.length > 5000) throw new ValidationError("message too long (max 5000 chars)");
 
-    if (!body.message) return c.json({ error: "message is required" }, 400);
-    if (body.message.length > 5000) return c.json({ error: "message too long (max 5000 chars)" }, 400);
-
-    const feedbackType = body.type || "general";
+    const feedbackType = input.type || "general";
     if (!VALID_FEEDBACK_TYPES.has(feedbackType)) {
-      return c.json({ error: "type must be one of: positive, negative, bug, feature, general" }, 400);
+      throw new ValidationError("type must be one of: positive, negative, bug, feature, general");
     }
 
     try {
-      await this.db.saveFeedback(userId, feedbackType, body.message, body.app_version ?? "");
+      await this.db.saveFeedback(userId, feedbackType, input.message, input.app_version ?? "");
     } catch {
-      return c.json({ error: "failed to save feedback" }, 500);
+      throw new ServiceError("INTERNAL", "failed to save feedback");
     }
 
-    return c.json({ status: "received" }, 201);
-  };
+    return { status: "received" };
+  }
 }

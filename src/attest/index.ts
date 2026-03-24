@@ -1,6 +1,6 @@
-import type { Context } from "hono";
 import { randomBytes, createHash, createVerify, X509Certificate } from "node:crypto";
 import { Buffer } from "node:buffer";
+import { ValidationError, NotConfiguredError, ForbiddenError, ServiceError } from "../errors/index.js";
 
 // ── Types & Interfaces ──────────────────────────────────────────────────────
 
@@ -37,9 +37,8 @@ export class AttestService {
     return randomBytes(32).toString("hex");
   }
 
-  /** POST /api/v1/attest/challenge */
-  handleChallenge = async (c: Context) => {
-    const userId = c.get("userId") as string;
+  /** Create a challenge nonce for attestation. Stores in DB if configured. */
+  async createChallenge(userId: string): Promise<{ nonce: string }> {
     const nonce = this.generateHexNonce();
 
     if (this.db) {
@@ -47,142 +46,115 @@ export class AttestService {
       try {
         await this.db.storeChallenge(nonce, userId, expiresAt);
       } catch {
-        return c.json({ error: "failed to store challenge" }, 500);
+        throw new ServiceError("INTERNAL", "failed to store challenge");
       }
     }
 
-    return c.json({ nonce });
-  };
+    return { nonce };
+  }
 
-  /** POST /api/v1/attest/verify */
-  handleVerify = async (c: Context) => {
-    if (!this.db) return c.json({ error: "attestation not configured" }, 501);
+  /** Verify a device attestation object. */
+  async verifyAttestation(
+    userId: string,
+    input: { key_id: string; attestation: string; nonce: string }
+  ): Promise<{ status: string }> {
+    if (!this.db) throw new NotConfiguredError("attestation not configured");
 
-    const userId = c.get("userId") as string;
-    const body = await c.req.json<{
-      key_id?: string;
-      attestation?: string;
-      nonce?: string;
-    }>();
-
-    if (!body.key_id) return c.json({ error: "key_id is required" }, 400);
-    if (!body.attestation) return c.json({ error: "attestation is required" }, 400);
-    if (!body.nonce) return c.json({ error: "nonce is required" }, 400);
+    if (!input.key_id) throw new ValidationError("key_id is required");
+    if (!input.attestation) throw new ValidationError("attestation is required");
+    if (!input.nonce) throw new ValidationError("nonce is required");
 
     // 1. Verify the challenge was issued to this user and hasn't expired
-    const challengeValid = await this.db.consumeChallenge(body.nonce, userId);
+    const challengeValid = await this.db.consumeChallenge(input.nonce, userId);
     if (!challengeValid) {
-      return c.json({ error: "invalid or expired challenge" }, 400);
+      throw new ValidationError("invalid or expired challenge");
     }
 
     // 2. Decode and verify the attestation object
     let attestData: Buffer;
     try {
-      attestData = Buffer.from(body.attestation, "base64");
+      attestData = Buffer.from(input.attestation, "base64");
     } catch {
-      return c.json({ error: "invalid attestation encoding" }, 400);
+      throw new ValidationError("invalid attestation encoding");
     }
 
     // 3. Verify the attestation structure
-    //    The attestation is a CBOR-encoded object containing:
-    //    - fmt: "apple-appattest"
-    //    - attStmt: { x5c: [cert chain], receipt: Buffer }
-    //    - authData: Buffer
     let parsed: AttestationObject;
     try {
       parsed = decodeCBORAttestation(attestData);
     } catch (err) {
-      return c.json({ error: `invalid attestation format: ${err}` }, 400);
+      throw new ValidationError(`invalid attestation format: ${err}`);
     }
 
     if (parsed.fmt !== "apple-appattest") {
-      return c.json({ error: `unexpected attestation format: ${parsed.fmt}` }, 400);
+      throw new ValidationError(`unexpected attestation format: ${parsed.fmt}`);
     }
 
     // 4. Verify the nonce is embedded in the attestation
-    //    Hash(clientDataHash || authData) should match the nonce in the cert extension
     const clientDataHash = createHash("sha256")
-      .update(Buffer.from(body.nonce, "hex"))
+      .update(Buffer.from(input.nonce, "hex"))
       .digest();
     const composite = Buffer.concat([parsed.authData, clientDataHash]);
     const expectedNonce = createHash("sha256").update(composite).digest();
 
     // 5. Verify the certificate chain
     if (!parsed.attStmt.x5c || parsed.attStmt.x5c.length < 2) {
-      return c.json({ error: "attestation missing certificate chain" }, 400);
+      throw new ValidationError("attestation missing certificate chain");
     }
 
     try {
       const credCert = new X509Certificate(parsed.attStmt.x5c[0]);
 
-      // Verify the nonce is in the credential certificate's OID 1.2.840.113635.100.8.2
+      // Verify nonce in credential certificate
       const certNonce = extractAttestNonce(credCert);
       if (certNonce && !expectedNonce.equals(certNonce)) {
-        return c.json({ error: "attestation nonce mismatch" }, 400);
+        throw new ValidationError("attestation nonce mismatch");
       }
 
-      // Verify the key ID matches the public key hash from authData
-      const authDataKeyHash = parsed.authData.subarray(37, 69); // credentialId starts at byte 37
-      const keyIdHash = createHash("sha256")
-        .update(Buffer.from(body.key_id, "base64url"))
-        .digest();
-      // The key_id from the client should correspond to the credential in authData
-      // For App Attest, the credentialId in authData IS the key identifier
-      if (authDataKeyHash.length >= 32) {
+      // Verify RP ID hash if appId configured
+      const authDataKeyHash = parsed.authData.subarray(37, 69);
+      if (authDataKeyHash.length >= 32 && this.cfg?.appId) {
         const rpIdHash = parsed.authData.subarray(0, 32);
-        if (this.cfg?.appId) {
-          const expectedRpId = createHash("sha256")
-            .update(this.cfg.appId)
-            .digest();
-          if (!rpIdHash.equals(expectedRpId)) {
-            return c.json({ error: "RP ID mismatch (wrong appId)" }, 400);
-          }
+        const expectedRpId = createHash("sha256").update(this.cfg.appId).digest();
+        if (!rpIdHash.equals(expectedRpId)) {
+          throw new ValidationError("RP ID mismatch (wrong appId)");
         }
       }
 
-      // Verify cert chain: leaf → intermediate → Apple root
+      // Verify cert chain
       const intermediateCert = new X509Certificate(parsed.attStmt.x5c[1]);
       if (!credCert.verify(intermediateCert.publicKey)) {
-        return c.json({ error: "credential certificate chain verification failed" }, 400);
+        throw new ValidationError("credential certificate chain verification failed");
       }
 
-      // Extract and store the public key for future assertion verification
+      // Extract and store the public key
       const publicKeyPem = credCert.publicKey
         .export({ type: "spki", format: "pem" })
         .toString();
 
-      await this.db.storeAttestKey(userId, body.key_id, publicKeyPem);
+      await this.db.storeAttestKey(userId, input.key_id, publicKeyPem);
     } catch (err) {
-      if (typeof err === "object" && err !== null && "message" in err) {
-        const msg = (err as Error).message;
-        if (msg.includes("attestation")) {
-          return c.json({ error: msg }, 400);
-        }
-      }
-      return c.json({ error: "attestation verification failed" }, 400);
+      if (err instanceof ValidationError) throw err;
+      throw new ValidationError("attestation verification failed");
     }
 
-    return c.json({ status: "verified" });
-  };
+    return { status: "verified" };
+  }
 
-  /** POST /api/v1/attest/assert — verify an assertion for ongoing requests. */
-  handleAssert = async (c: Context) => {
-    if (!this.db) return c.json({ error: "attestation not configured" }, 501);
+  /** Verify an assertion from an attested device. */
+  async verifyAssertion(
+    userId: string,
+    input: { assertion: string; client_data?: string; nonce: string }
+  ): Promise<{ status: string }> {
+    if (!this.db) throw new NotConfiguredError("attestation not configured");
 
-    const userId = c.get("userId") as string;
-    const body = await c.req.json<{
-      assertion?: string;
-      client_data?: string;
-      nonce?: string;
-    }>();
-
-    if (!body.assertion) return c.json({ error: "assertion is required" }, 400);
-    if (!body.nonce) return c.json({ error: "nonce is required" }, 400);
+    if (!input.assertion) throw new ValidationError("assertion is required");
+    if (!input.nonce) throw new ValidationError("nonce is required");
 
     // Verify the challenge
-    const challengeValid = await this.db.consumeChallenge(body.nonce, userId);
+    const challengeValid = await this.db.consumeChallenge(input.nonce, userId);
     if (!challengeValid) {
-      return c.json({ error: "invalid or expired challenge" }, 400);
+      throw new ValidationError("invalid or expired challenge");
     }
 
     // Get stored public key
@@ -190,96 +162,72 @@ export class AttestService {
     try {
       stored = await this.db.getAttestKey(userId);
     } catch {
-      return c.json({ error: "device not attested" }, 403);
+      throw new ForbiddenError("device not attested");
     }
 
     // Verify the assertion signature
-    const assertionData = Buffer.from(body.assertion, "base64");
+    const assertionData = Buffer.from(input.assertion, "base64");
     const clientDataHash = createHash("sha256")
-      .update(body.client_data ?? body.nonce)
+      .update(input.client_data ?? input.nonce)
       .digest();
 
     try {
-      // Assertion format: authData || signature
-      // authData is at least 37 bytes, signature follows
       if (assertionData.length < 39) {
-        return c.json({ error: "assertion too short" }, 400);
+        throw new ValidationError("assertion too short");
       }
 
-      // Find signature boundary: authData is variable length, minimum 37 bytes
-      // The signature is a DER-encoded ECDSA signature at the end
       const authData = assertionData.subarray(0, assertionData.length - getDerSignatureLength(assertionData));
       const signature = assertionData.subarray(authData.length);
 
-      // Verify: sign(authData || clientDataHash) with stored public key
       const signedData = Buffer.concat([authData, clientDataHash]);
       const verifier = createVerify("SHA256");
       verifier.update(signedData);
       const valid = verifier.verify(stored.publicKey, signature);
 
       if (!valid) {
-        return c.json({ error: "assertion signature invalid" }, 400);
+        throw new ValidationError("assertion signature invalid");
       }
-    } catch {
-      return c.json({ error: "assertion verification failed" }, 400);
+    } catch (err) {
+      if (err instanceof ValidationError) throw err;
+      throw new ValidationError("assertion verification failed");
     }
 
-    return c.json({ status: "valid" });
-  };
+    return { status: "valid" };
+  }
 
-  /** Middleware: require valid attestation (checks that the device has been attested). */
-  requireAttest = async (c: Context, next: () => Promise<void>) => {
-    if (!this.db) return c.json({ error: "attestation not configured" }, 501);
-
-    const userId = c.get("userId") as string;
-    if (!userId) return c.json({ error: "unauthorized" }, 401);
+  /** Check if a user's device has been attested. Throws ForbiddenError if not. */
+  async checkAttestation(userId: string): Promise<void> {
+    if (!this.db) throw new NotConfiguredError("attestation not configured");
+    if (!userId) throw new ValidationError("userId is required");
 
     try {
       const key = await this.db.getAttestKey(userId);
-      if (!key?.keyId) return c.json({ error: "device not attested" }, 403);
-    } catch {
-      return c.json({ error: "device not attested" }, 403);
+      if (!key?.keyId) throw new ForbiddenError("device not attested");
+    } catch (err) {
+      if (err instanceof ForbiddenError || err instanceof NotConfiguredError) throw err;
+      throw new ForbiddenError("device not attested");
     }
-
-    await next();
-  };
+  }
 }
 
 // ── CBOR Minimal Decoder ──────────────────────────────────────────────────
 
 interface AttestationObject {
   fmt: string;
-  attStmt: {
-    x5c?: Buffer[];
-    receipt?: Buffer;
-  };
+  attStmt: { x5c?: Buffer[]; receipt?: Buffer };
   authData: Buffer;
 }
 
-/**
- * Minimal CBOR decoder for Apple App Attest attestation objects.
- * Only handles the subset of CBOR needed for attestation (maps, strings, byte strings).
- */
 function decodeCBORAttestation(data: Buffer): AttestationObject {
   let offset = 0;
 
-  function readByte(): number {
-    return data[offset++];
-  }
+  function readByte(): number { return data[offset++]; }
 
   function readUint(additionalInfo: number): number {
     if (additionalInfo < 24) return additionalInfo;
     if (additionalInfo === 24) return readByte();
-    if (additionalInfo === 25) {
-      const val = data.readUInt16BE(offset);
-      offset += 2;
-      return val;
-    }
-    if (additionalInfo === 26) {
-      const val = data.readUInt32BE(offset);
-      offset += 4;
-      return val;
-    }
+    if (additionalInfo === 25) { const val = data.readUInt16BE(offset); offset += 2; return val; }
+    if (additionalInfo === 26) { const val = data.readUInt32BE(offset); offset += 4; return val; }
     throw new Error("cbor: unsupported integer size");
   }
 
@@ -289,44 +237,14 @@ function decodeCBORAttestation(data: Buffer): AttestationObject {
     const additionalInfo = initial & 0x1f;
 
     switch (majorType) {
-      case 0: // unsigned int
-        return readUint(additionalInfo);
-      case 1: // negative int
-        return -1 - readUint(additionalInfo);
-      case 2: { // byte string
-        const len = readUint(additionalInfo);
-        const val = Buffer.from(data.subarray(offset, offset + len));
-        offset += len;
-        return val;
-      }
-      case 3: { // text string
-        const len = readUint(additionalInfo);
-        const val = data.subarray(offset, offset + len).toString("utf-8");
-        offset += len;
-        return val;
-      }
-      case 4: { // array
-        const len = readUint(additionalInfo);
-        const arr: unknown[] = [];
-        for (let i = 0; i < len; i++) arr.push(readValue());
-        return arr;
-      }
-      case 5: { // map
-        const len = readUint(additionalInfo);
-        const map: Record<string, unknown> = {};
-        for (let i = 0; i < len; i++) {
-          const key = String(readValue());
-          map[key] = readValue();
-        }
-        return map;
-      }
-      case 7: // special (true, false, null, etc.)
-        if (additionalInfo === 20) return false;
-        if (additionalInfo === 21) return true;
-        if (additionalInfo === 22) return null;
-        return undefined;
-      default:
-        throw new Error(`cbor: unsupported major type ${majorType}`);
+      case 0: return readUint(additionalInfo);
+      case 1: return -1 - readUint(additionalInfo);
+      case 2: { const len = readUint(additionalInfo); const val = Buffer.from(data.subarray(offset, offset + len)); offset += len; return val; }
+      case 3: { const len = readUint(additionalInfo); const val = data.subarray(offset, offset + len).toString("utf-8"); offset += len; return val; }
+      case 4: { const len = readUint(additionalInfo); const arr: unknown[] = []; for (let i = 0; i < len; i++) arr.push(readValue()); return arr; }
+      case 5: { const len = readUint(additionalInfo); const map: Record<string, unknown> = {}; for (let i = 0; i < len; i++) { const key = String(readValue()); map[key] = readValue(); } return map; }
+      case 7: if (additionalInfo === 20) return false; if (additionalInfo === 21) return true; if (additionalInfo === 22) return null; return undefined;
+      default: throw new Error(`cbor: unsupported major type ${majorType}`);
     }
   }
 
@@ -343,23 +261,15 @@ function decodeCBORAttestation(data: Buffer): AttestationObject {
   };
 }
 
-/** Extract the attestation nonce from the credential certificate's OID 1.2.840.113635.100.8.2 */
 function extractAttestNonce(cert: X509Certificate): Buffer | null {
-  // The nonce is in an extension with OID 1.2.840.113635.100.8.2
-  // We extract it from the raw DER data by searching for the OID
   const oid = Buffer.from([0x06, 0x0a, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x63, 0x64, 0x08, 0x02]);
   const raw = Buffer.from(cert.raw);
   const idx = raw.indexOf(oid);
   if (idx === -1) return null;
 
-  // After the OID, there's an OCTET STRING wrapping the nonce
-  // Navigate: OID → OCTET STRING (ext value) → SEQUENCE → SET → OCTET STRING (nonce)
   let pos = idx + oid.length;
-  // Skip through ASN.1 wrappers to find the innermost OCTET STRING
-  // This is a simplified extraction — find the 32-byte nonce
   const remaining = raw.subarray(pos);
   for (let i = 0; i < remaining.length - 32; i++) {
-    // Look for OCTET STRING tag (0x04) followed by length 0x20 (32 bytes)
     if (remaining[i] === 0x04 && remaining[i + 1] === 0x20) {
       return Buffer.from(remaining.subarray(i + 2, i + 2 + 32));
     }
@@ -367,19 +277,13 @@ function extractAttestNonce(cert: X509Certificate): Buffer | null {
   return null;
 }
 
-/** Determine the length of a DER-encoded ECDSA signature at the end of a buffer. */
 function getDerSignatureLength(buf: Buffer): number {
-  // DER signatures start with 0x30 (SEQUENCE), we search from the end
-  // A P-256 ECDSA signature is typically 70-72 bytes
   for (let i = buf.length - 72; i < buf.length - 60; i++) {
     if (i < 0) continue;
     if (buf[i] === 0x30) {
       const seqLen = buf[i + 1];
-      if (seqLen + 2 === buf.length - i) {
-        return seqLen + 2;
-      }
+      if (seqLen + 2 === buf.length - i) return seqLen + 2;
     }
   }
-  // Fallback: assume 71 bytes (typical P-256)
   return Math.min(72, buf.length - 37);
 }

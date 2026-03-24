@@ -1,4 +1,3 @@
-import type { Context } from "hono";
 import type { PushProvider } from "../push/index.js";
 export interface ChatDB {
     /** Returns messages ordered by created_at DESC (newest first). */
@@ -57,74 +56,34 @@ export declare class ChatService {
     private cfg;
     private hub;
     constructor(db: ChatDB, push: PushProvider, cfg: ChatConfig);
-    /** GET /api/v1/chat */
-    handleGetChat: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
-        messages: {
-            id: number;
-            user_id: string;
-            sender: string;
-            message: string;
-            message_type: string;
-            read_at: string | null;
-            created_at: string;
-        }[];
+    getMessages(userId: string, opts?: {
+        since_id?: number;
+        limit?: number;
+        offset?: number;
+    }): Promise<{
+        messages: ChatMessage[];
         has_more: boolean;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
-    /** POST /api/v1/chat */
-    handleSendChat: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
+    }>;
+    sendMessage(userId: string, message: string, messageType?: string): Promise<{
         status: string;
         id: number;
-        created_at: string;
-    }, 201, "json">)>;
-    /** GET /api/v1/chat/unread */
-    handleUnreadCount: (c: Context) => Promise<Response & import("hono").TypedResponse<{
+        created_at: Date | string;
+    }>;
+    getUnreadCount(userId: string): Promise<{
         count: number;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">>;
-    /** GET /admin/api/chat */
-    handleAdminListChats: (c: Context) => Promise<Response & import("hono").TypedResponse<{
-        threads: never[] | {
-            user_id: string;
-            user_name: string;
-            user_email: string;
-            last_message: string;
-            last_sender: string;
-            unread_count: number;
-            last_message_at: string;
-        }[];
+    }>;
+    adminListChats(limit?: number): Promise<{
+        threads: ChatThread[];
         count: number;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">>;
-    /** GET /admin/api/chat/:user_id */
-    handleAdminGetChat: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
-        messages: {
-            id: number;
-            user_id: string;
-            sender: string;
-            message: string;
-            message_type: string;
-            read_at: string | null;
-            created_at: string;
-        }[];
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
-    /** POST /admin/api/chat/:user_id */
-    handleAdminReplyChat: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
+    }>;
+    adminGetMessages(userId: string, limit?: number, offset?: number): Promise<{
+        messages: ChatMessage[];
+    }>;
+    adminReply(userId: string, message: string, messageType?: string): Promise<{
         status: string;
-    }, 201, "json">)>;
+        id: number;
+        created_at: Date | string;
+    }>;
     /** Get the Hub for WebSocket upgrade handlers. */
     getHub(): Hub;
     /** Call from your WebSocket open handler to register a connection. Returns a cleanup function. */

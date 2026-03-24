@@ -1,7 +1,12 @@
-import type { Context } from "hono";
-import { setCookie, deleteCookie } from "hono/cookie";
 import * as jose from "jose";
 import { randomUUID } from "node:crypto";
+import {
+  ValidationError,
+  NotFoundError,
+  UnauthorizedError,
+  NotConfiguredError,
+  ServiceError,
+} from "../errors/index.js";
 
 // ── Types & Interfaces ──────────────────────────────────────────────────────
 
@@ -48,14 +53,12 @@ export interface AuthConfig {
   /** Session expiry in seconds (default: 7 days). */
   sessionExpirySec?: number;
   productionEnv?: boolean;
-  /** Cookie name for session token (default: "session"). */
-  cookieName?: string;
   /** Optional server-side session store for revocation support. */
   sessionDB?: SessionDB;
   /**
    * Apple web OAuth2 client secret for Sign in with Apple web flow.
    * This is a JWT generated from your App Store Connect API key.
-   * If not provided, handleWebAuth will return 501.
+   * If not provided, authenticateWithWeb will throw NotConfiguredError.
    */
   appleClientSecret?: string;
   /** Redirect URI for Sign in with Apple web flow. */
@@ -169,25 +172,23 @@ export class AuthService {
     return uid;
   }
 
-  // ── HTTP Handlers ───────────────────────────────────────────────────────
+  // ── Pure Business Methods ─────────────────────────────────────────────
 
-  /** POST /api/v1/auth/apple — mobile Sign in with Apple (identity token). */
-  handleAppleAuth = async (c: Context) => {
-    const body = await c.req.json<{
-      identity_token?: string;
-      name?: string;
-    }>();
-
-    if (!body.identity_token) {
-      return c.json({ error: "identity_token is required" }, 400);
+  /** Authenticate via mobile Sign in with Apple (identity token). */
+  async authenticateWithApple(
+    identityToken: string,
+    name?: string
+  ): Promise<{ token: string; user: User }> {
+    if (!identityToken) {
+      throw new ValidationError("identity_token is required");
     }
 
     let sub: string, email: string;
     try {
-      ({ sub, email } = await this.verifyAppleIdToken(body.identity_token));
+      ({ sub, email } = await this.verifyAppleIdToken(identityToken));
     } catch (err) {
       console.log(`[auth] apple token verification failed: ${err}`);
-      return c.json({ error: "token verification failed" }, 401);
+      throw new UnauthorizedError("token verification failed");
     }
 
     let user: User;
@@ -196,36 +197,31 @@ export class AuthService {
         randomUUID(),
         sub,
         email,
-        body.name ?? ""
+        name ?? ""
       );
     } catch {
-      return c.json({ error: "failed to create user" }, 500);
+      throw new ServiceError("INTERNAL", "failed to create user");
     }
 
-    const sessionToken = await this.createSessionToken(user.id);
-
-    setCookie(c, this.cfg.cookieName ?? "session", sessionToken, {
-      path: "/",
-      httpOnly: true,
-      secure: this.cfg.productionEnv ?? false,
-      sameSite: "Lax",
-      maxAge: this.sessionExpirySec,
-    });
-
-    return c.json({ token: sessionToken, user });
-  };
+    const token = await this.createSessionToken(user.id);
+    return { token, user };
+  }
 
   /**
-   * POST /api/v1/auth/apple/web — Sign in with Apple web OAuth2 code exchange.
+   * Authenticate via Sign in with Apple web OAuth2 code exchange.
    * Requires appleClientSecret and appleRedirectUri in config.
    */
-  handleWebAuth = async (c: Context) => {
+  async authenticateWithWeb(
+    code: string,
+    name?: string
+  ): Promise<{ token: string; user: User }> {
     if (!this.cfg.appleClientSecret || !this.cfg.appleRedirectUri || !this.cfg.appleWebClientId) {
-      return c.json({ error: "web auth not configured" }, 501);
+      throw new NotConfiguredError("web auth not configured");
     }
 
-    const body = await c.req.json<{ code?: string; name?: string }>();
-    if (!body.code) return c.json({ error: "authorization code is required" }, 400);
+    if (!code) {
+      throw new ValidationError("authorization code is required");
+    }
 
     // Exchange authorization code for tokens
     let idToken: string;
@@ -236,7 +232,7 @@ export class AuthService {
         body: new URLSearchParams({
           client_id: this.cfg.appleWebClientId,
           client_secret: this.cfg.appleClientSecret,
-          code: body.code,
+          code,
           grant_type: "authorization_code",
           redirect_uri: this.cfg.appleRedirectUri,
         }),
@@ -245,15 +241,18 @@ export class AuthService {
       if (!tokenRes.ok) {
         const errBody = await tokenRes.text();
         console.log(`[auth] apple token exchange failed: ${tokenRes.status} ${errBody}`);
-        return c.json({ error: "authorization code exchange failed" }, 401);
+        throw new UnauthorizedError("authorization code exchange failed");
       }
 
       const tokenData = (await tokenRes.json()) as { id_token?: string };
-      if (!tokenData.id_token) return c.json({ error: "no id_token in response" }, 401);
+      if (!tokenData.id_token) {
+        throw new UnauthorizedError("no id_token in response");
+      }
       idToken = tokenData.id_token;
     } catch (err) {
+      if (err instanceof UnauthorizedError) throw err;
       console.log(`[auth] apple token exchange error: ${err}`);
-      return c.json({ error: "token exchange failed" }, 502);
+      throw new ServiceError("INTERNAL", "token exchange failed");
     }
 
     // Verify the id_token
@@ -262,90 +261,65 @@ export class AuthService {
       ({ sub, email } = await this.verifyAppleIdToken(idToken));
     } catch (err) {
       console.log(`[auth] web id_token verification failed: ${err}`);
-      return c.json({ error: "token verification failed" }, 401);
+      throw new UnauthorizedError("token verification failed");
     }
 
     let user: User;
     try {
-      user = await this.db.upsertUserByAppleSub(randomUUID(), sub, email, body.name ?? "");
+      user = await this.db.upsertUserByAppleSub(randomUUID(), sub, email, name ?? "");
     } catch {
-      return c.json({ error: "failed to create user" }, 500);
+      throw new ServiceError("INTERNAL", "failed to create user");
     }
 
-    const sessionToken = await this.createSessionToken(user.id);
+    const token = await this.createSessionToken(user.id);
+    return { token, user };
+  }
 
-    setCookie(c, this.cfg.cookieName ?? "session", sessionToken, {
-      path: "/",
-      httpOnly: true,
-      secure: true,
-      sameSite: "Lax",
-      maxAge: this.sessionExpirySec,
-    });
-
-    return c.json({ token: sessionToken, user });
-  };
-
-  /** GET /api/v1/auth/me */
-  handleMe = async (c: Context) => {
-    const userId = c.get("userId") as string;
+  /** Get the current user by ID. */
+  async getUser(userId: string): Promise<User> {
     try {
-      const user = await this.db.userById(userId);
-      return c.json(user);
+      return await this.db.userById(userId);
     } catch {
-      return c.json({ error: "user not found" }, 404);
+      throw new NotFoundError("user not found");
     }
-  };
+  }
 
-  /** POST /api/v1/auth/logout — revokes current session. */
-  handleLogout = async (c: Context) => {
-    // Revoke server-side session if available
-    if (this.cfg.sessionDB) {
+  /** Revoke a specific session token. */
+  async logout(sessionToken?: string): Promise<void> {
+    if (this.cfg.sessionDB && sessionToken) {
       try {
-        const auth = c.req.header("authorization");
-        let token = auth?.startsWith("Bearer ") ? auth.slice(7) : undefined;
-        if (!token) {
-          const { getCookie } = await import("hono/cookie");
-          token = getCookie(c, this.cfg.cookieName ?? "session");
-        }
-        if (token) {
-          const { payload } = await jose.jwtVerify(token, this.secretKey, { algorithms: ["HS256"] });
-          if (payload.jti) await this.cfg.sessionDB.revokeSession(payload.jti);
-        }
+        const { payload } = await jose.jwtVerify(sessionToken, this.secretKey, { algorithms: ["HS256"] });
+        if (payload.jti) await this.cfg.sessionDB.revokeSession(payload.jti);
       } catch {
         // Token invalid or expired — no session to revoke
       }
     }
+  }
 
-    deleteCookie(c, this.cfg.cookieName ?? "session", { path: "/" });
-    return c.json({ status: "logged out" });
-  };
-
-  /** POST /api/v1/auth/logout-all — revokes all sessions for the current user. */
-  handleLogoutAll = async (c: Context) => {
-    if (!this.cfg.sessionDB) return c.json({ error: "session management not configured" }, 501);
-
-    const userId = c.get("userId") as string;
+  /** Revoke all sessions for a user. */
+  async logoutAll(userId: string): Promise<void> {
+    if (!this.cfg.sessionDB) {
+      throw new NotConfiguredError("session management not configured");
+    }
     await this.cfg.sessionDB.revokeAllSessions(userId);
-    deleteCookie(c, this.cfg.cookieName ?? "session", { path: "/" });
-    return c.json({ status: "all sessions revoked" });
-  };
+  }
 
-  /** GET /api/v1/auth/sessions — list active sessions (multi-device visibility). */
-  handleListSessions = async (c: Context) => {
-    if (!this.cfg.sessionDB?.activeSessions) return c.json({ error: "session listing not available" }, 501);
+  /** List active sessions for a user (multi-device visibility). */
+  async listSessions(userId: string): Promise<Array<{ jti: string; createdAt: Date | string }>> {
+    if (!this.cfg.sessionDB?.activeSessions) {
+      throw new NotConfiguredError("session listing not available");
+    }
+    return await this.cfg.sessionDB.activeSessions(userId);
+  }
 
-    const userId = c.get("userId") as string;
-    const sessions = await this.cfg.sessionDB.activeSessions(userId);
-    return c.json({ sessions });
-  };
-
-  /** DELETE /api/v1/auth/sessions/:jti — revoke a specific session. */
-  handleRevokeSession = async (c: Context) => {
-    if (!this.cfg.sessionDB) return c.json({ error: "session management not configured" }, 501);
-
-    const jti = c.req.param("jti");
-    if (!jti) return c.json({ error: "session id is required" }, 400);
+  /** Revoke a specific session by jti. */
+  async revokeSession(jti: string): Promise<void> {
+    if (!this.cfg.sessionDB) {
+      throw new NotConfiguredError("session management not configured");
+    }
+    if (!jti) {
+      throw new ValidationError("session id is required");
+    }
     await this.cfg.sessionDB.revokeSession(jti);
-    return c.json({ status: "session revoked" });
-  };
+  }
 }

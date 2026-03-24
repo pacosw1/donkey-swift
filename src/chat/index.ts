@@ -1,5 +1,5 @@
-import type { Context } from "hono";
 import type { PushProvider } from "../push/index.js";
+import { ValidationError, ServiceError } from "../errors/index.js";
 
 // ── Types & Interfaces ──────────────────────────────────────────────────────
 
@@ -106,125 +106,118 @@ export class ChatService {
     private cfg: ChatConfig
   ) {}
 
-  /** GET /api/v1/chat */
-  handleGetChat = async (c: Context) => {
-    const userId = c.get("userId") as string;
-    const sinceIdStr = c.req.query("since_id");
-
-    if (sinceIdStr) {
-      const sinceId = parseInt(sinceIdStr, 10);
-      if (isNaN(sinceId)) return c.json({ error: "invalid since_id" }, 400);
+  async getMessages(
+    userId: string,
+    opts?: { since_id?: number; limit?: number; offset?: number }
+  ): Promise<{ messages: ChatMessage[]; has_more: boolean }> {
+    if (opts?.since_id !== undefined) {
+      if (isNaN(opts.since_id)) throw new ValidationError("invalid since_id");
       let msgs: ChatMessage[];
       try {
-        msgs = await this.db.getChatMessagesSince(userId, sinceId);
+        msgs = await this.db.getChatMessagesSince(userId, opts.since_id);
       } catch {
-        return c.json({ error: "failed to get messages" }, 500);
+        throw new ServiceError("INTERNAL", "failed to get messages");
       }
       await this.db.markChatRead(userId, "user").catch(() => {});
-      return c.json({ messages: msgs, has_more: false });
+      return { messages: msgs, has_more: false };
     }
 
     let limit = 50;
     let offset = 0;
-    const limitStr = c.req.query("limit");
-    const offsetStr = c.req.query("offset");
-    if (limitStr) { const n = parseInt(limitStr); if (n > 0 && n <= 200) limit = n; }
-    if (offsetStr) { const n = parseInt(offsetStr); if (n >= 0) offset = n; }
+    if (opts?.limit !== undefined && opts.limit > 0 && opts.limit <= 200) limit = opts.limit;
+    if (opts?.offset !== undefined && opts.offset >= 0) offset = opts.offset;
 
     let msgs: ChatMessage[];
     try {
       msgs = await this.db.getChatMessages(userId, limit + 1, offset);
     } catch {
-      return c.json({ error: "failed to get messages" }, 500);
+      throw new ServiceError("INTERNAL", "failed to get messages");
     }
     await this.db.markChatRead(userId, "user").catch(() => {});
 
     const hasMore = msgs.length > limit;
-    return c.json({ messages: hasMore ? msgs.slice(0, limit) : msgs, has_more: hasMore });
-  };
+    return { messages: hasMore ? msgs.slice(0, limit) : msgs, has_more: hasMore };
+  }
 
-  /** POST /api/v1/chat */
-  handleSendChat = async (c: Context) => {
-    const userId = c.get("userId") as string;
-    const body = await c.req.json<{ message?: string; message_type?: string }>();
-
-    if (!body.message) return c.json({ error: "message is required" }, 400);
-    if (body.message.length > 5000) return c.json({ error: "message too long (max 5000 chars)" }, 400);
+  async sendMessage(
+    userId: string,
+    message: string,
+    messageType?: string
+  ): Promise<{ status: string; id: number; created_at: Date | string }> {
+    if (!message) throw new ValidationError("message is required");
+    if (message.length > 5000) throw new ValidationError("message too long (max 5000 chars)");
 
     let msg: ChatMessage;
     try {
-      msg = await this.db.sendChatMessage(userId, "user", body.message, body.message_type ?? "text");
+      msg = await this.db.sendChatMessage(userId, "user", message, messageType ?? "text");
     } catch {
-      return c.json({ error: "failed to send message" }, 500);
+      throw new ServiceError("INTERNAL", "failed to send message");
     }
 
     this.broadcastChatMessage(msg);
-    return c.json({ status: "sent", id: msg.id, created_at: msg.created_at }, 201);
-  };
+    return { status: "sent", id: msg.id, created_at: msg.created_at };
+  }
 
-  /** GET /api/v1/chat/unread */
-  handleUnreadCount = async (c: Context) => {
-    const userId = c.get("userId") as string;
+  async getUnreadCount(userId: string): Promise<{ count: number }> {
     const count = await this.db.getUnreadCount(userId).catch(() => 0);
-    return c.json({ count });
-  };
+    return { count };
+  }
 
-  /** GET /admin/api/chat */
-  handleAdminListChats = async (c: Context) => {
-    let limit = 100;
-    const limitStr = c.req.query("limit");
-    if (limitStr) { const n = parseInt(limitStr); if (n > 0 && n <= 500) limit = n; }
+  async adminListChats(limit?: number): Promise<{ threads: ChatThread[]; count: number }> {
+    let effectiveLimit = 100;
+    if (limit !== undefined && limit > 0 && limit <= 500) effectiveLimit = limit;
 
-    const threads = await this.db.adminListChatThreads(limit).catch(() => []);
-    return c.json({ threads, count: threads.length });
-  };
+    const threads = await this.db.adminListChatThreads(effectiveLimit).catch(() => []);
+    return { threads, count: threads.length };
+  }
 
-  /** GET /admin/api/chat/:user_id */
-  handleAdminGetChat = async (c: Context) => {
-    const userId = c.req.param("user_id");
-    if (!userId) return c.json({ error: "missing user_id" }, 400);
+  async adminGetMessages(
+    userId: string,
+    limit?: number,
+    offset?: number
+  ): Promise<{ messages: ChatMessage[] }> {
+    if (!userId) throw new ValidationError("missing user_id");
 
-    let limit = 200, offset = 0;
-    const limitStr = c.req.query("limit");
-    const offsetStr = c.req.query("offset");
-    if (limitStr) { const n = parseInt(limitStr); if (n > 0 && n <= 500) limit = n; }
-    if (offsetStr) { const n = parseInt(offsetStr); if (n >= 0) offset = n; }
+    let effectiveLimit = 200;
+    let effectiveOffset = 0;
+    if (limit !== undefined && limit > 0 && limit <= 500) effectiveLimit = limit;
+    if (offset !== undefined && offset >= 0) effectiveOffset = offset;
 
     let msgs: ChatMessage[];
     try {
-      msgs = await this.db.getChatMessages(userId, limit, offset);
+      msgs = await this.db.getChatMessages(userId, effectiveLimit, effectiveOffset);
     } catch {
-      return c.json({ error: "failed to get messages" }, 500);
+      throw new ServiceError("INTERNAL", "failed to get messages");
     }
     await this.db.markChatRead(userId, "admin").catch(() => {});
-    return c.json({ messages: msgs });
-  };
+    return { messages: msgs };
+  }
 
-  /** POST /admin/api/chat/:user_id */
-  handleAdminReplyChat = async (c: Context) => {
-    const userId = c.req.param("user_id");
-    if (!userId) return c.json({ error: "missing user_id" }, 400);
-
-    const body = await c.req.json<{ message?: string; message_type?: string }>();
-    if (!body.message) return c.json({ error: "message is required" }, 400);
-    if (body.message.length > 5000) return c.json({ error: "message too long (max 5000 chars)" }, 400);
+  async adminReply(
+    userId: string,
+    message: string,
+    messageType?: string
+  ): Promise<{ status: string; id: number; created_at: Date | string }> {
+    if (!userId) throw new ValidationError("missing user_id");
+    if (!message) throw new ValidationError("message is required");
+    if (message.length > 5000) throw new ValidationError("message too long (max 5000 chars)");
 
     let msg: ChatMessage;
     try {
-      msg = await this.db.sendChatMessage(userId, "admin", body.message, body.message_type ?? "text");
+      msg = await this.db.sendChatMessage(userId, "admin", message, messageType ?? "text");
     } catch {
-      return c.json({ error: "failed to send reply" }, 500);
+      throw new ServiceError("INTERNAL", "failed to send reply");
     }
 
     this.broadcastChatMessage(msg);
 
     // Send push if user has no active WebSocket
     if (!this.hub.hasActiveConnection(`user:${userId}`)) {
-      this.sendChatPush(userId, body.message);
+      this.sendChatPush(userId, message);
     }
 
-    return c.json({ status: "sent" }, 201);
-  };
+    return { status: "sent", id: msg.id, created_at: msg.created_at };
+  }
 
   /** Get the Hub for WebSocket upgrade handlers. */
   getHub(): Hub {

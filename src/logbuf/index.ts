@@ -1,5 +1,3 @@
-import type { Context } from "hono";
-
 /** Ring-buffer log capture for admin panels. */
 export class LogBuffer {
   private lines: string[];
@@ -39,6 +37,17 @@ export class LogBuffer {
     }
     return result;
   }
+
+  /** Query logs with optional limit and filter. */
+  queryLogs(opts?: { limit?: number; filter?: string }): { lines: string[]; count: number } {
+    const limit = Math.min(Math.max(opts?.limit ?? 500, 1), 5000);
+    let lines = this.getLines(limit);
+    if (opts?.filter) {
+      const f = opts.filter.toLowerCase();
+      lines = lines.filter((l) => l.toLowerCase().includes(f));
+    }
+    return { lines, count: lines.length };
+  }
 }
 
 /**
@@ -54,26 +63,5 @@ export function setupLogCapture(buf: LogBuffer): () => void {
   };
   return () => {
     console.log = originalLog;
-  };
-}
-
-/** Returns a Hono handler that serves buffered log lines. ?limit=500&filter=error */
-export function handleAdminLogs(buf: LogBuffer) {
-  return async (c: Context) => {
-    let limit = 500;
-    const limitParam = c.req.query("limit");
-    if (limitParam) {
-      const parsed = parseInt(limitParam, 10);
-      if (parsed > 0 && parsed <= 5000) limit = parsed;
-    }
-
-    const filter = c.req.query("filter")?.toLowerCase();
-    let lines = buf.getLines(limit);
-
-    if (filter) {
-      lines = lines.filter((l) => l.toLowerCase().includes(filter));
-    }
-
-    return c.json({ lines, count: lines.length });
   };
 }

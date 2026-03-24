@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { Hono } from "hono";
 import { EngageService, type EngageDB, type EngageConfig, type EventHook } from "../engage/index.js";
+import { ValidationError, ServiceError } from "../errors/index.js";
 
 function mockDB(overrides: Partial<EngageDB> = {}): EngageDB {
   return {
@@ -25,178 +25,136 @@ function mockDB(overrides: Partial<EngageDB> = {}): EngageDB {
   };
 }
 
-function buildApp(db: EngageDB, cfg: EngageConfig = {}) {
-  const svc = new EngageService(cfg, db);
-  const a = new Hono();
-  a.use("*", async (c, next) => {
-    c.set("userId", "user-1");
-    await next();
-  });
-  a.post("/events", svc.handleTrackEvents);
-  a.put("/subscription", svc.handleUpdateSubscription);
-  a.post("/sessions", svc.handleSessionReport);
-  a.post("/feedback", svc.handleSubmitFeedback);
-  return { app: a, svc };
+function buildService(db?: EngageDB, cfg: EngageConfig = {}): EngageService {
+  return new EngageService(cfg, db ?? mockDB());
 }
 
 describe("EngageService", () => {
-  describe("handleTrackEvents", () => {
-    it("rejects empty events (400)", async () => {
-      const { app } = buildApp(mockDB());
-      const res = await app.request("/events", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ events: [] }),
-      });
-      expect(res.status).toBe(400);
-      const json = await res.json();
-      expect(json.error).toContain("events array is required");
+  describe("trackEvents", () => {
+    it("rejects empty events", async () => {
+      const svc = buildService();
+      await expect(svc.trackEvents("user-1", [])).rejects.toThrow(ValidationError);
+      await expect(svc.trackEvents("user-1", [])).rejects.toThrow("events array is required");
     });
 
-    it("rejects > 100 events (400)", async () => {
-      const { app } = buildApp(mockDB());
+    it("rejects > 100 events", async () => {
+      const svc = buildService();
       const events = Array.from({ length: 101 }, (_, i) => ({ event: `e${i}` }));
-      const res = await app.request("/events", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ events }),
-      });
-      expect(res.status).toBe(400);
-      const json = await res.json();
-      expect(json.error).toContain("maximum 100");
+      await expect(svc.trackEvents("user-1", events)).rejects.toThrow("maximum 100");
     });
 
-    it("rejects events with missing event name (400)", async () => {
-      const { app } = buildApp(mockDB());
-      const res = await app.request("/events", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ events: [{ metadata: {} }] }),
-      });
-      expect(res.status).toBe(400);
-      const json = await res.json();
-      expect(json.error).toContain("event");
+    it("rejects events with missing event name", async () => {
+      const svc = buildService();
+      await expect(
+        svc.trackEvents("user-1", [{ metadata: {} } as { event: string }])
+      ).rejects.toThrow("event");
     });
 
     it("tracks valid events successfully", async () => {
       const db = mockDB();
-      const { app } = buildApp(db);
-      const res = await app.request("/events", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ events: [{ event: "tap_button" }, { event: "view_screen" }] }),
-      });
-      expect(res.status).toBe(200);
-      const json = await res.json();
-      expect(json.tracked).toBe(2);
+      const svc = buildService(db);
+      const result = await svc.trackEvents("user-1", [{ event: "tap_button" }, { event: "view_screen" }]);
+      expect(result.tracked).toBe(2);
       expect(db.trackEvents).toHaveBeenCalledWith("user-1", expect.any(Array));
     });
 
     it("triggers event hooks", async () => {
       const db = mockDB();
-      const { app, svc } = buildApp(db);
+      const svc = buildService(db);
       const hook: EventHook = vi.fn();
       svc.registerEventHook(hook);
 
-      await app.request("/events", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ events: [{ event: "purchase" }] }),
-      });
+      await svc.trackEvents("user-1", [{ event: "purchase" }]);
 
       expect(hook).toHaveBeenCalledWith("user-1", expect.arrayContaining([
         expect.objectContaining({ event: "purchase" }),
       ]));
     });
-  });
 
-  describe("handleUpdateSubscription", () => {
-    it("rejects invalid status (400)", async () => {
-      const { app } = buildApp(mockDB());
-      const res = await app.request("/subscription", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "bogus" }),
-      });
-      expect(res.status).toBe(400);
-      const json = await res.json();
-      expect(json.error).toContain("status must be one of");
+    it("throws ServiceError when DB fails", async () => {
+      const db = mockDB({ trackEvents: vi.fn().mockRejectedValue(new Error("db down")) });
+      const svc = buildService(db);
+      await expect(
+        svc.trackEvents("user-1", [{ event: "test" }])
+      ).rejects.toThrow(ServiceError);
     });
   });
 
-  describe("handleSessionReport", () => {
-    it("rejects missing session_id (400)", async () => {
-      const { app } = buildApp(mockDB());
-      const res = await app.request("/sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "start" }),
-      });
-      expect(res.status).toBe(400);
-      const json = await res.json();
-      expect(json.error).toContain("session_id");
+  describe("updateSubscription", () => {
+    it("rejects invalid status", async () => {
+      const svc = buildService();
+      await expect(
+        svc.updateSubscription("user-1", { status: "bogus" })
+      ).rejects.toThrow("status must be one of");
     });
 
-    it("rejects invalid action (400)", async () => {
-      const { app } = buildApp(mockDB());
-      const res = await app.request("/sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: "s1", action: "pause" }),
-      });
-      expect(res.status).toBe(400);
-      const json = await res.json();
-      expect(json.error).toContain("action must be");
-    });
-
-    it("rejects duration > 86400 (400)", async () => {
-      const { app } = buildApp(mockDB());
-      const res = await app.request("/sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: "s1", action: "end", duration_s: 90000 }),
-      });
-      expect(res.status).toBe(400);
-      const json = await res.json();
-      expect(json.error).toContain("duration_s");
+    it("rejects missing status", async () => {
+      const svc = buildService();
+      await expect(
+        svc.updateSubscription("user-1", {})
+      ).rejects.toThrow("status is required");
     });
   });
 
-  describe("handleSubmitFeedback", () => {
-    it("rejects missing message (400)", async () => {
-      const { app } = buildApp(mockDB());
-      const res = await app.request("/feedback", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      expect(res.status).toBe(400);
-      const json = await res.json();
-      expect(json.error).toContain("message is required");
+  describe("reportSession", () => {
+    it("rejects missing session_id", async () => {
+      const svc = buildService();
+      await expect(
+        svc.reportSession("user-1", { action: "start" } as { session_id: string; action: "start" | "end" })
+      ).rejects.toThrow("session_id");
     });
 
-    it("rejects message > 5000 chars (400)", async () => {
-      const { app } = buildApp(mockDB());
-      const res = await app.request("/feedback", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: "x".repeat(5001) }),
-      });
-      expect(res.status).toBe(400);
-      const json = await res.json();
-      expect(json.error).toContain("too long");
+    it("rejects invalid action", async () => {
+      const svc = buildService();
+      await expect(
+        svc.reportSession("user-1", { session_id: "s1", action: "pause" as "start" | "end" })
+      ).rejects.toThrow("action must be");
     });
 
-    it("rejects invalid feedback type (400)", async () => {
-      const { app } = buildApp(mockDB());
-      const res = await app.request("/feedback", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: "great app", type: "rant" }),
-      });
-      expect(res.status).toBe(400);
-      const json = await res.json();
-      expect(json.error).toContain("type must be one of");
+    it("rejects duration > 86400", async () => {
+      const svc = buildService();
+      await expect(
+        svc.reportSession("user-1", { session_id: "s1", action: "end", duration_s: 90000 })
+      ).rejects.toThrow("duration_s");
+    });
+
+    it("starts a session successfully", async () => {
+      const db = mockDB();
+      const svc = buildService(db);
+      const result = await svc.reportSession("user-1", { session_id: "s1", action: "start" });
+      expect(result.status).toBe("ok");
+      expect(db.startSession).toHaveBeenCalledWith("user-1", "s1", "", "", "");
+    });
+  });
+
+  describe("submitFeedback", () => {
+    it("rejects missing message", async () => {
+      const svc = buildService();
+      await expect(
+        svc.submitFeedback("user-1", { message: "" })
+      ).rejects.toThrow("message is required");
+    });
+
+    it("rejects message > 5000 chars", async () => {
+      const svc = buildService();
+      await expect(
+        svc.submitFeedback("user-1", { message: "x".repeat(5001) })
+      ).rejects.toThrow("too long");
+    });
+
+    it("rejects invalid feedback type", async () => {
+      const svc = buildService();
+      await expect(
+        svc.submitFeedback("user-1", { message: "great app", type: "rant" })
+      ).rejects.toThrow("type must be one of");
+    });
+
+    it("saves feedback successfully", async () => {
+      const db = mockDB();
+      const svc = buildService(db);
+      const result = await svc.submitFeedback("user-1", { message: "great app" });
+      expect(result.status).toBe("received");
+      expect(db.saveFeedback).toHaveBeenCalledWith("user-1", "general", "great app", "");
     });
   });
 });

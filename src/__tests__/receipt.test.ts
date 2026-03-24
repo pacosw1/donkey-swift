@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { Hono } from "hono";
 import { ReceiptService, type ReceiptDB, type ReceiptConfig } from "../receipt/index.js";
+import { ValidationError } from "../errors/index.js";
 
 function mockDB(overrides: Partial<ReceiptDB> = {}): ReceiptDB {
   return {
@@ -11,90 +11,39 @@ function mockDB(overrides: Partial<ReceiptDB> = {}): ReceiptDB {
   };
 }
 
-function buildApp(db: ReceiptDB, cfg: ReceiptConfig = {}) {
-  const svc = new ReceiptService(db, cfg);
-  const a = new Hono();
-
-  // Authenticated route
-  const authed = new Hono();
-  authed.use("*", async (c, next) => {
-    c.set("userId", "user-1");
-    await next();
-  });
-  authed.post("/receipt/verify", svc.handleVerifyReceipt);
-
-  // Unauthenticated route (webhook has no auth)
-  a.route("/", authed);
-  a.post("/receipt/webhook", svc.handleWebhook);
-
-  return { app: a, svc };
-}
-
-function buildUnauthApp(db: ReceiptDB, cfg: ReceiptConfig = {}) {
-  const svc = new ReceiptService(db, cfg);
-  const a = new Hono();
-  // No userId set -- simulates unauthenticated request
-  a.post("/receipt/verify", svc.handleVerifyReceipt);
-  return { app: a, svc };
-}
-
 describe("ReceiptService", () => {
-  describe("handleVerifyReceipt", () => {
-    it("rejects missing transaction (400)", async () => {
-      const { app } = buildApp(mockDB());
-      const res = await app.request("/receipt/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      expect(res.status).toBe(400);
-      const json = await res.json();
-      expect(json.error).toContain("transaction is required");
+  describe("verifyReceipt", () => {
+    it("rejects missing transaction", async () => {
+      const svc = new ReceiptService(mockDB(), {});
+      await expect(svc.verifyReceipt("user-1", ""))
+        .rejects.toThrow(ValidationError);
     });
 
     it("rejects unauthorized (no userId)", async () => {
-      const { app } = buildUnauthApp(mockDB());
-      const res = await app.request("/receipt/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transaction: "fake.jws.token" }),
-      });
-      expect(res.status).toBe(401);
-      const json = await res.json();
-      expect(json.error).toContain("unauthorized");
+      const svc = new ReceiptService(mockDB(), {});
+      await expect(svc.verifyReceipt("", "fake.jws.token"))
+        .rejects.toThrow(ValidationError);
     });
   });
 
-  describe("handleWebhook", () => {
-    it("rejects missing signedPayload (400)", async () => {
-      const { app } = buildApp(mockDB());
-      const res = await app.request("/receipt/webhook", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      expect(res.status).toBe(400);
-      const json = await res.json();
-      expect(json.error).toContain("invalid webhook payload");
+  describe("processWebhook", () => {
+    it("rejects missing signedPayload", async () => {
+      const svc = new ReceiptService(mockDB(), {});
+      await expect(svc.processWebhook(""))
+        .rejects.toThrow(ValidationError);
     });
 
     it("handles TEST notification type", async () => {
       const db = mockDB();
-      const { svc, app } = buildApp(db);
+      const svc = new ReceiptService(db, {});
 
       // Mock the private JWS verification to return a TEST notification payload
       vi.spyOn(svc as any, "verifyAndDecodePayload").mockResolvedValue(
         JSON.stringify({ notificationType: "TEST" })
       );
 
-      const res = await app.request("/receipt/webhook", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ signedPayload: "fake.jws.token" }),
-      });
-      expect(res.status).toBe(200);
-      const json = await res.json();
-      expect(json.status).toBe("ok");
+      const result = await svc.processWebhook("fake.jws.token");
+      expect(result.status).toBe("ok");
 
       // DB should not be called for TEST notifications
       expect(db.upsertSubscription).not.toHaveBeenCalled();

@@ -1,3 +1,4 @@
+import { ValidationError, ServiceError } from "../errors/index.js";
 export class Hub {
     connections = new Map();
     key(role, userId) {
@@ -52,137 +53,103 @@ export class ChatService {
         this.push = push;
         this.cfg = cfg;
     }
-    /** GET /api/v1/chat */
-    handleGetChat = async (c) => {
-        const userId = c.get("userId");
-        const sinceIdStr = c.req.query("since_id");
-        if (sinceIdStr) {
-            const sinceId = parseInt(sinceIdStr, 10);
-            if (isNaN(sinceId))
-                return c.json({ error: "invalid since_id" }, 400);
+    async getMessages(userId, opts) {
+        if (opts?.since_id !== undefined) {
+            if (isNaN(opts.since_id))
+                throw new ValidationError("invalid since_id");
             let msgs;
             try {
-                msgs = await this.db.getChatMessagesSince(userId, sinceId);
+                msgs = await this.db.getChatMessagesSince(userId, opts.since_id);
             }
             catch {
-                return c.json({ error: "failed to get messages" }, 500);
+                throw new ServiceError("INTERNAL", "failed to get messages");
             }
             await this.db.markChatRead(userId, "user").catch(() => { });
-            return c.json({ messages: msgs, has_more: false });
+            return { messages: msgs, has_more: false };
         }
         let limit = 50;
         let offset = 0;
-        const limitStr = c.req.query("limit");
-        const offsetStr = c.req.query("offset");
-        if (limitStr) {
-            const n = parseInt(limitStr);
-            if (n > 0 && n <= 200)
-                limit = n;
-        }
-        if (offsetStr) {
-            const n = parseInt(offsetStr);
-            if (n >= 0)
-                offset = n;
-        }
+        if (opts?.limit !== undefined && opts.limit > 0 && opts.limit <= 200)
+            limit = opts.limit;
+        if (opts?.offset !== undefined && opts.offset >= 0)
+            offset = opts.offset;
         let msgs;
         try {
             msgs = await this.db.getChatMessages(userId, limit + 1, offset);
         }
         catch {
-            return c.json({ error: "failed to get messages" }, 500);
+            throw new ServiceError("INTERNAL", "failed to get messages");
         }
         await this.db.markChatRead(userId, "user").catch(() => { });
         const hasMore = msgs.length > limit;
-        return c.json({ messages: hasMore ? msgs.slice(0, limit) : msgs, has_more: hasMore });
-    };
-    /** POST /api/v1/chat */
-    handleSendChat = async (c) => {
-        const userId = c.get("userId");
-        const body = await c.req.json();
-        if (!body.message)
-            return c.json({ error: "message is required" }, 400);
-        if (body.message.length > 5000)
-            return c.json({ error: "message too long (max 5000 chars)" }, 400);
+        return { messages: hasMore ? msgs.slice(0, limit) : msgs, has_more: hasMore };
+    }
+    async sendMessage(userId, message, messageType) {
+        if (!message)
+            throw new ValidationError("message is required");
+        if (message.length > 5000)
+            throw new ValidationError("message too long (max 5000 chars)");
         let msg;
         try {
-            msg = await this.db.sendChatMessage(userId, "user", body.message, body.message_type ?? "text");
+            msg = await this.db.sendChatMessage(userId, "user", message, messageType ?? "text");
         }
         catch {
-            return c.json({ error: "failed to send message" }, 500);
+            throw new ServiceError("INTERNAL", "failed to send message");
         }
         this.broadcastChatMessage(msg);
-        return c.json({ status: "sent", id: msg.id, created_at: msg.created_at }, 201);
-    };
-    /** GET /api/v1/chat/unread */
-    handleUnreadCount = async (c) => {
-        const userId = c.get("userId");
+        return { status: "sent", id: msg.id, created_at: msg.created_at };
+    }
+    async getUnreadCount(userId) {
         const count = await this.db.getUnreadCount(userId).catch(() => 0);
-        return c.json({ count });
-    };
-    /** GET /admin/api/chat */
-    handleAdminListChats = async (c) => {
-        let limit = 100;
-        const limitStr = c.req.query("limit");
-        if (limitStr) {
-            const n = parseInt(limitStr);
-            if (n > 0 && n <= 500)
-                limit = n;
-        }
-        const threads = await this.db.adminListChatThreads(limit).catch(() => []);
-        return c.json({ threads, count: threads.length });
-    };
-    /** GET /admin/api/chat/:user_id */
-    handleAdminGetChat = async (c) => {
-        const userId = c.req.param("user_id");
+        return { count };
+    }
+    async adminListChats(limit) {
+        let effectiveLimit = 100;
+        if (limit !== undefined && limit > 0 && limit <= 500)
+            effectiveLimit = limit;
+        const threads = await this.db.adminListChatThreads(effectiveLimit).catch(() => []);
+        return { threads, count: threads.length };
+    }
+    async adminGetMessages(userId, limit, offset) {
         if (!userId)
-            return c.json({ error: "missing user_id" }, 400);
-        let limit = 200, offset = 0;
-        const limitStr = c.req.query("limit");
-        const offsetStr = c.req.query("offset");
-        if (limitStr) {
-            const n = parseInt(limitStr);
-            if (n > 0 && n <= 500)
-                limit = n;
-        }
-        if (offsetStr) {
-            const n = parseInt(offsetStr);
-            if (n >= 0)
-                offset = n;
-        }
+            throw new ValidationError("missing user_id");
+        let effectiveLimit = 200;
+        let effectiveOffset = 0;
+        if (limit !== undefined && limit > 0 && limit <= 500)
+            effectiveLimit = limit;
+        if (offset !== undefined && offset >= 0)
+            effectiveOffset = offset;
         let msgs;
         try {
-            msgs = await this.db.getChatMessages(userId, limit, offset);
+            msgs = await this.db.getChatMessages(userId, effectiveLimit, effectiveOffset);
         }
         catch {
-            return c.json({ error: "failed to get messages" }, 500);
+            throw new ServiceError("INTERNAL", "failed to get messages");
         }
         await this.db.markChatRead(userId, "admin").catch(() => { });
-        return c.json({ messages: msgs });
-    };
-    /** POST /admin/api/chat/:user_id */
-    handleAdminReplyChat = async (c) => {
-        const userId = c.req.param("user_id");
+        return { messages: msgs };
+    }
+    async adminReply(userId, message, messageType) {
         if (!userId)
-            return c.json({ error: "missing user_id" }, 400);
-        const body = await c.req.json();
-        if (!body.message)
-            return c.json({ error: "message is required" }, 400);
-        if (body.message.length > 5000)
-            return c.json({ error: "message too long (max 5000 chars)" }, 400);
+            throw new ValidationError("missing user_id");
+        if (!message)
+            throw new ValidationError("message is required");
+        if (message.length > 5000)
+            throw new ValidationError("message too long (max 5000 chars)");
         let msg;
         try {
-            msg = await this.db.sendChatMessage(userId, "admin", body.message, body.message_type ?? "text");
+            msg = await this.db.sendChatMessage(userId, "admin", message, messageType ?? "text");
         }
         catch {
-            return c.json({ error: "failed to send reply" }, 500);
+            throw new ServiceError("INTERNAL", "failed to send reply");
         }
         this.broadcastChatMessage(msg);
         // Send push if user has no active WebSocket
         if (!this.hub.hasActiveConnection(`user:${userId}`)) {
-            this.sendChatPush(userId, body.message);
+            this.sendChatPush(userId, message);
         }
-        return c.json({ status: "sent" }, 201);
-    };
+        return { status: "sent", id: msg.id, created_at: msg.created_at };
+    }
     /** Get the Hub for WebSocket upgrade handlers. */
     getHub() {
         return this.hub;

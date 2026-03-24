@@ -1,4 +1,3 @@
-import type { Context } from "hono";
 import type { PushProvider } from "../push/index.js";
 export interface NotifyDB {
     upsertDeviceToken(dt: DeviceToken): Promise<void>;
@@ -47,52 +46,29 @@ export declare class NotifyService {
     private db;
     private push;
     constructor(db: NotifyDB, push: PushProvider);
-    /** POST /api/v1/notifications/devices */
-    handleRegisterDevice: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
+    registerDevice(userId: string, input: {
+        token: string;
+        platform?: string;
+        device_model?: string;
+        os_version?: string;
+        app_version?: string;
+        apns_topic?: string;
+    }): Promise<{
         status: string;
-    }, 201, "json">)>;
-    /** DELETE /api/v1/notifications/devices */
-    handleDisableDevice: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
+    }>;
+    disableDevice(userId: string, token: string): Promise<{
         status: string;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
-    /** GET /api/v1/notifications/preferences */
-    handleGetPrefs: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        user_id: string;
+    }>;
+    getPreferences(userId: string): Promise<NotificationPreferences>;
+    updatePreferences(userId: string, input: Partial<{
         push_enabled: boolean;
         interval_seconds: number;
         wake_hour: number;
         sleep_hour: number;
         timezone: string;
         stop_after_goal: boolean;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">)>;
-    /** PUT /api/v1/notifications/preferences */
-    handleUpdatePrefs: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        user_id: string;
-        push_enabled: boolean;
-        interval_seconds: number;
-        wake_hour: number;
-        sleep_hour: number;
-        timezone: string;
-        stop_after_goal: boolean;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
-    /** POST /api/v1/notifications/opened */
-    handleNotificationOpened: (c: Context) => Promise<Response & import("hono").TypedResponse<{
-        status: string;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">>;
+    }>): Promise<NotificationPreferences>;
+    trackOpened(userId: string, notificationId?: string): Promise<void>;
 }
 export type TickFunc = (userId: string, prefs: NotificationPreferences, tokens: DeviceToken[], push: PushProvider) => Promise<void>;
 /** Checks whether a user has completed their daily goal. Used by stop_after_goal. */
@@ -123,10 +99,6 @@ export declare class NotifyScheduler {
 }
 /** Get the current hour (0-23) in a timezone. Handles midnight correctly. */
 export declare function getHourInTimezone(date: Date, timezone: string): number;
-/**
- * Example tick function. Replace with your app-specific notification logic.
- * This exists as a reference — do not use in production without customizing the copy.
- */
 /**
  * Example tick function. Replace with your app-specific notification logic.
  * Uses sendRich when available to pass per-device APNs topic (for watchOS support).

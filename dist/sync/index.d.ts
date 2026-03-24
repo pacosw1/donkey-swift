@@ -1,4 +1,3 @@
-import type { Context } from "hono";
 import type { PushProvider } from "../push/index.js";
 export interface SyncDB {
     serverTime(): Promise<Date | string>;
@@ -70,41 +69,17 @@ export declare class SyncService {
     private cleanupInterval;
     constructor(db: SyncDB, handler: EntityHandler, cfg?: SyncConfig);
     close(): void;
-    /** GET /api/v1/sync/changes?since={ISO8601} */
-    handleSyncChanges: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        [x: string]: import("hono/utils/types").JSONValue;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
-    /** POST /api/v1/sync/batch */
-    handleSyncBatch: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        items: {
-            client_id: string;
-            server_id: string;
-            version: number;
-        }[];
-        errors: {
-            client_id: string;
-            error: string;
-            is_conflict?: boolean | undefined;
-            server_version?: number | undefined;
-        }[];
-        synced_at: string;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">)>;
-    /** DELETE /api/v1/sync/:entity_type/:id */
-    handleSyncDelete: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
+    getChanges(userId: string, opts?: {
+        since?: string;
+        deviceId?: string;
+    }): Promise<Record<string, unknown>>;
+    syncBatch(userId: string, items: BatchItem[], opts?: {
+        deviceId?: string;
+        idempotencyKey?: string;
+    }): Promise<BatchResponse>;
+    deleteEntity(userId: string, entityType: string, entityId: string, deviceId?: string): Promise<{
         status: string;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
+    }>;
     /** Notify other devices of a sync event. Debounced per user. */
     notifyOtherDevices(userId: string, excludeDeviceId?: string): void;
     private fireNotify;

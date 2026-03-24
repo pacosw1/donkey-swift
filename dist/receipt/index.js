@@ -1,5 +1,6 @@
 import * as jose from "jose";
 import { X509Certificate } from "node:crypto";
+import { ValidationError, ServiceError } from "../errors/index.js";
 // ── Apple Root CA ───────────────────────────────────────────────────────────
 const APPLE_ROOT_CA_PEM = `-----BEGIN CERTIFICATE-----
 MIICQzCCAcmgAwIBAgIILcX8iNLFS5UwCgYIKoZIzj0EAwMwZzEbMBkGA1UEAwwS
@@ -24,25 +25,22 @@ export class ReceiptService {
         this.db = db;
         this.cfg = cfg;
     }
-    /** POST /api/v1/receipt/verify */
-    handleVerifyReceipt = async (c) => {
-        const userId = c.get("userId");
+    async verifyReceipt(userId, transactionJWS) {
         if (!userId)
-            return c.json({ error: "unauthorized" }, 401);
-        const body = await c.req.json();
-        if (!body.transaction)
-            return c.json({ error: "transaction is required" }, 400);
+            throw new ValidationError("unauthorized");
+        if (!transactionJWS)
+            throw new ValidationError("transaction is required");
         let txn;
         try {
-            txn = await this.verifyAndParseTransaction(body.transaction);
+            txn = await this.verifyAndParseTransaction(transactionJWS);
         }
         catch (err) {
             console.log(`[receipt] verification failed for user ${userId}: ${err}`);
-            return c.json({ error: "transaction verification failed" }, 400);
+            throw new ValidationError("transaction verification failed");
         }
         const validationErr = this.validateTransaction(txn);
         if (validationErr)
-            return c.json({ error: validationErr }, 400);
+            throw new ValidationError(validationErr);
         const status = this.transactionToStatus(txn);
         const expiresAt = txn.expiresDate ? new Date(txn.expiresDate) : null;
         const currency = txn.currency || "USD";
@@ -53,7 +51,7 @@ export class ReceiptService {
             await this.db.upsertSubscription(userId, txn.productId, txn.originalTransactionId, status, expiresAt, priceCents, currency);
         }
         catch {
-            return c.json({ error: "failed to update subscription" }, 500);
+            throw new ServiceError("INTERNAL", "failed to update subscription");
         }
         await this.db.storeTransaction({
             transaction_id: txn.transactionId,
@@ -67,40 +65,38 @@ export class ReceiptService {
             price_cents: priceCents,
             currency_code: currency,
         }).catch((err) => console.log(`[receipt] failed to store audit: ${err}`));
-        return c.json({
+        return {
             verified: true,
             status,
             product_id: txn.productId,
             transaction_id: txn.transactionId,
             expires_at: expiresAt,
-        });
-    };
-    /** POST /api/v1/receipt/webhook (no auth - Apple calls directly) */
-    handleWebhook = async (c) => {
-        const body = await c.req.json();
-        if (!body.signedPayload)
-            return c.json({ error: "invalid webhook payload" }, 400);
+        };
+    }
+    async processWebhook(signedPayload) {
+        if (!signedPayload)
+            throw new ValidationError("invalid webhook payload");
         let notificationPayload;
         try {
-            notificationPayload = await this.verifyAndDecodePayload(body.signedPayload);
+            notificationPayload = await this.verifyAndDecodePayload(signedPayload);
         }
         catch (err) {
             console.log(`[receipt] webhook JWS verification failed: ${err}`);
-            return c.json({ error: "invalid signature" }, 400);
+            throw new ValidationError("invalid signature");
         }
         let notification;
         try {
             notification = JSON.parse(notificationPayload);
         }
         catch {
-            return c.json({ error: "malformed notification payload" }, 400);
+            throw new ValidationError("malformed notification payload");
         }
         console.log(`[receipt] webhook: type=${notification.notificationType} subtype=${notification.subtype} env=${notification.data?.environment}`);
         if (notification.notificationType === "TEST") {
-            return c.json({ status: "ok" });
+            return { status: "ok" };
         }
         if (!notification.data?.signedTransactionInfo) {
-            return c.json({ error: "missing signed transaction info" }, 400);
+            throw new ValidationError("missing signed transaction info");
         }
         let txn;
         try {
@@ -108,17 +104,17 @@ export class ReceiptService {
         }
         catch (err) {
             console.log(`[receipt] webhook transaction verification failed: ${err}`);
-            return c.json({ error: "invalid transaction signature" }, 400);
+            throw new ValidationError("invalid transaction signature");
         }
         const validationErr = this.validateTransaction(txn);
         if (validationErr)
-            return c.json({ error: validationErr }, 400);
+            throw new ValidationError(validationErr);
         let userId = await this.db.userIdByTransactionId(txn.originalTransactionId).catch(() => "");
         if (!userId && txn.appAccountToken)
             userId = txn.appAccountToken;
         if (!userId) {
             console.log(`[receipt] webhook: unknown transaction ${txn.originalTransactionId}`);
-            return c.json({ status: "unknown_transaction" });
+            return { status: "unknown_transaction" };
         }
         const notifType = notification.notificationType ?? "";
         const notifSubtype = notification.subtype ?? "";
@@ -143,8 +139,8 @@ export class ReceiptService {
             currency_code: currency,
             notification_type: notifType || undefined,
         }).catch((err) => console.log(`[receipt] failed to store audit: ${err}`));
-        return c.json({ status: "ok" });
-    };
+        return { status: "ok" };
+    }
     // ── JWS Verification ────────────────────────────────────────────────────
     async verifyAndDecodePayload(jwsString) {
         const parts = jwsString.split(".");

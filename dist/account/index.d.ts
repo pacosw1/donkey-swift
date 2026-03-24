@@ -1,4 +1,3 @@
-import type { Context } from "hono";
 export interface AccountDB {
     getUserEmail(userId: string): Promise<string>;
     deleteUserData(userId: string): Promise<void>;
@@ -42,32 +41,15 @@ export declare class AccountService {
         cleanup?: AppCleanup;
         exporter?: AppExporter;
     });
-    /** DELETE /api/v1/account */
-    handleDeleteAccount: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
+    /** Delete a user account and all associated data. */
+    deleteAccount(userId: string): Promise<{
         status: string;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
-    /** POST /api/v1/account/anonymize */
-    handleAnonymizeAccount: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
+    }>;
+    /** Anonymize a user account (remove PII but keep the record). */
+    anonymizeAccount(userId: string): Promise<{
         status: string;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
-    /** GET /api/v1/account/export */
-    handleExportData: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
-        user: import("hono/utils/types").JSONValue;
-        subscription?: import("hono/utils/types").JSONValue | undefined;
-        events?: import("hono/utils/types").JSONValue | undefined;
-        sessions?: import("hono/utils/types").JSONValue | undefined;
-        feedback?: import("hono/utils/types").JSONValue | undefined;
-        chat_messages?: import("hono/utils/types").JSONValue | undefined;
-        device_tokens?: import("hono/utils/types").JSONValue | undefined;
-        notification_preferences?: import("hono/utils/types").JSONValue | undefined;
-        transactions?: import("hono/utils/types").JSONValue | undefined;
-        app_data?: import("hono/utils/types").JSONValue | undefined;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
+    }>;
+    /** Export all user data. */
+    exportData(userId: string): Promise<UserDataExport>;
 }
 //# sourceMappingURL=index.d.ts.map

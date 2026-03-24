@@ -1,4 +1,3 @@
-import type { Context } from "hono";
 export interface AnalyticsDB {
     dauTimeSeries(since: Date | string): Promise<DAURow[]>;
     eventCounts(since: Date | string, event?: string): Promise<EventRow[]>;
@@ -45,79 +44,36 @@ export interface RetentionRow {
 export declare class AnalyticsService {
     private db;
     constructor(db: AnalyticsDB);
-    /** GET /admin/api/analytics/dau */
-    handleDAU: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        data: {
-            date: string;
-            dau: number;
-        }[];
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">)>;
-    /** GET /admin/api/analytics/events */
-    handleEvents: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        data: {
-            date: string;
-            event: string;
-            count: number;
-            unique_users: number;
-        }[];
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">)>;
-    /** GET /admin/api/analytics/mrr */
-    handleMRR: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        mrr_cents?: number | undefined;
-        breakdown: {
-            status: string;
-            count: number;
-        }[];
+    getDau(since?: string): Promise<{
+        data: DAURow[];
+    }>;
+    getEvents(opts?: {
+        since?: string;
+        event?: string;
+    }): Promise<{
+        data: EventRow[];
+    }>;
+    getMrr(): Promise<{
+        breakdown: SubStats[];
         new_30d: number;
         churned_30d: number;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">)>;
-    /** GET /admin/api/analytics/summary */
-    handleSummary: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        trial_conversion_rate?: number | undefined;
+        mrr_cents?: number;
+    }>;
+    getSummary(): Promise<{
         dau: number;
         mau: number;
         total_users: number;
         active_subscriptions: number;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">)>;
-    /** GET /admin/api/analytics/retention */
-    handleRetention: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 501, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        data: {
-            cohort_date: string;
-            day: number;
-            retained_pct: number;
-            users: number;
-        }[];
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">)>;
-    /** GET /admin/api/analytics/revenue */
-    handleRevenue: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 501, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        data: {
-            date: string;
-            revenue_cents: number;
-        }[];
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">)>;
+        trial_conversion_rate?: number;
+    }>;
+    getRetention(opts?: {
+        since?: string;
+        days?: string;
+    }): Promise<{
+        data: RetentionRow[];
+    }>;
+    getRevenue(since?: string): Promise<{
+        data: RevenueRow[];
+    }>;
 }
 //# sourceMappingURL=index.d.ts.map

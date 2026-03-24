@@ -1,4 +1,4 @@
-import type { Context } from "hono";
+import { ServiceError } from "../errors/index.js";
 
 // ── Types & Interfaces ──────────────────────────────────────────────────────
 
@@ -56,9 +56,8 @@ export class AccountService {
     this.appExport = opts?.exporter;
   }
 
-  /** DELETE /api/v1/account */
-  handleDeleteAccount = async (c: Context) => {
-    const userId = c.get("userId") as string;
+  /** Delete a user account and all associated data. */
+  async deleteAccount(userId: string): Promise<{ status: string }> {
     const email = await this.db.getUserEmail(userId).catch(() => "");
 
     const deleteAll = async () => {
@@ -79,35 +78,32 @@ export class AccountService {
         await deleteAll();
       }
     } catch {
-      return c.json({ error: "failed to delete account" }, 500);
+      throw new ServiceError("INTERNAL", "failed to delete account");
     }
 
     // Callback (outside transaction — fire and forget)
     if (this.cfg.onDelete && email) this.cfg.onDelete(userId, email);
 
-    return c.json({ status: "deleted" });
-  };
+    return { status: "deleted" };
+  }
 
-  /** POST /api/v1/account/anonymize */
-  handleAnonymizeAccount = async (c: Context) => {
-    const userId = c.get("userId") as string;
+  /** Anonymize a user account (remove PII but keep the record). */
+  async anonymizeAccount(userId: string): Promise<{ status: string }> {
     try {
       await this.db.anonymizeUser(userId);
     } catch {
-      return c.json({ error: "failed to anonymize account" }, 500);
+      throw new ServiceError("INTERNAL", "failed to anonymize account");
     }
-    return c.json({ status: "anonymized" });
-  };
+    return { status: "anonymized" };
+  }
 
-  /** GET /api/v1/account/export */
-  handleExportData = async (c: Context) => {
-    const userId = c.get("userId") as string;
-
+  /** Export all user data. */
+  async exportData(userId: string): Promise<UserDataExport> {
     let exportData: UserDataExport;
     try {
       exportData = await this.db.exportUserData(userId);
     } catch {
-      return c.json({ error: "failed to export data" }, 500);
+      throw new ServiceError("INTERNAL", "failed to export data");
     }
 
     if (this.appExport) {
@@ -115,7 +111,6 @@ export class AccountService {
       if (appData) exportData.app_data = appData;
     }
 
-    c.header("Content-Disposition", "attachment; filename=account-data.json");
-    return c.json(exportData);
-  };
+    return exportData;
+  }
 }

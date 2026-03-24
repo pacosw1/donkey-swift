@@ -1,4 +1,3 @@
-import type { Context } from "hono";
 export interface ReceiptDB {
     upsertSubscription(userId: string, productId: string, originalTransactionId: string, status: string, expiresAt: Date | string | null, priceCents: number, currencyCode: string): Promise<void>;
     userIdByTransactionId(originalTransactionId: string): Promise<string>;
@@ -49,26 +48,10 @@ export declare class ReceiptService {
     private db;
     private cfg;
     constructor(db: ReceiptDB, cfg: ReceiptConfig);
-    /** POST /api/v1/receipt/verify */
-    handleVerifyReceipt: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 401, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
-        verified: true;
+    verifyReceipt(userId: string, transactionJWS: string): Promise<VerifyResponse>;
+    processWebhook(signedPayload: string): Promise<{
         status: string;
-        product_id: string;
-        transaction_id: string;
-        expires_at: string | null;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
-    /** POST /api/v1/receipt/webhook (no auth - Apple calls directly) */
-    handleWebhook: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        status: string;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
+    }>;
     private verifyAndDecodePayload;
     private verifyAndParseTransaction;
     private validateTransaction;

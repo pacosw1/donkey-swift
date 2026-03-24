@@ -1,5 +1,3 @@
-import type { Context } from "hono";
-
 /** A named health check. */
 export interface Check {
   name: string;
@@ -13,13 +11,13 @@ export interface HealthConfig {
 export class HealthService {
   constructor(private cfg: HealthConfig) {}
 
-  /** GET /health - always 200. Use as a liveness probe. */
-  handleHealth = async (c: Context) => {
-    return c.json({ status: "ok" });
-  };
+  /** Run health check (liveness). Always returns ok. */
+  health(): { status: string } {
+    return { status: "ok" };
+  }
 
-  /** GET /ready - runs all checks, 503 if any fail. Use as a readiness probe. */
-  handleReady = async (c: Context) => {
+  /** Run readiness checks. Returns check results and overall status. */
+  async ready(): Promise<{ status: string; checks: Record<string, string> }> {
     const checks: Record<string, string> = {};
     let allOk = true;
 
@@ -33,23 +31,15 @@ export class HealthService {
       }
     }
 
-    if (!allOk) {
-      return c.json({ status: "not_ready", checks }, 503);
-    }
-    return c.json({ status: "ready", checks });
-  };
+    return { status: allOk ? "ready" : "not_ready", checks };
+  }
 }
 
 // ── Health Check Factories ─────────────────────────────────────────────────
 
 /** Creates a health check that runs a query against the database. */
 export function dbCheck(name: string, queryFn: () => Promise<unknown>): Check {
-  return {
-    name,
-    fn: async () => {
-      await queryFn();
-    },
-  };
+  return { name, fn: async () => { await queryFn(); } };
 }
 
 /** Creates a health check that verifies a URL is reachable (HEAD request with timeout). */
@@ -60,10 +50,7 @@ export function urlCheck(name: string, url: string, timeoutMs = 5000): Check {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        const res = await fetch(url, {
-          method: "HEAD",
-          signal: controller.signal,
-        });
+        const res = await fetch(url, { method: "HEAD", signal: controller.signal });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
       } finally {
         clearTimeout(timer);
@@ -72,22 +59,12 @@ export function urlCheck(name: string, url: string, timeoutMs = 5000): Check {
   };
 }
 
-/** Creates a health check for S3/storage connectivity using a HEAD bucket operation. */
+/** Creates a health check for S3/storage connectivity. */
 export function storageCheck(name: string, headFn: () => Promise<unknown>): Check {
-  return {
-    name,
-    fn: async () => {
-      await headFn();
-    },
-  };
+  return { name, fn: async () => { await headFn(); } };
 }
 
 /** Creates a health check that verifies a push provider can generate a token. */
 export function pushCheck(name: string, tokenFn: () => Promise<unknown>): Check {
-  return {
-    name,
-    fn: async () => {
-      await tokenFn();
-    },
-  };
+  return { name, fn: async () => { await tokenFn(); } };
 }

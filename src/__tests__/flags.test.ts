@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { Hono } from "hono";
 import { FlagsService, type FlagsDB, type Flag } from "../flags/index.js";
+import { ValidationError, NotFoundError } from "../errors/index.js";
 
 function mockDB(overrides: Partial<FlagsDB> = {}): FlagsDB {
   return {
@@ -104,145 +104,69 @@ describe("FlagsService.isEnabled", () => {
   });
 });
 
-// ── Admin handler tests ─────────────────────────────────────────────────────
+// ── Admin method tests ─────────────────────────────────────────────────────
 
-describe("FlagsService admin handlers", () => {
-  function buildAdminApp(svc: FlagsService): Hono {
-    const a = new Hono();
-    a.post("/admin/flags", svc.handleAdminCreate);
-    a.put("/admin/flags/:key", svc.handleAdminUpdate);
-    a.delete("/admin/flags/:key", svc.handleAdminDelete);
-    a.post("/admin/flags/:key/overrides", svc.handleAdminSetOverride);
-    a.delete("/admin/flags/:key/overrides/:user_id", svc.handleAdminDeleteOverride);
-    return a;
-  }
-
-  describe("handleAdminCreate", () => {
-    it("rejects rollout_pct > 100 with 400", async () => {
+describe("FlagsService admin methods", () => {
+  describe("createFlag", () => {
+    it("rejects rollout_pct > 100", async () => {
       const svc = new FlagsService(mockDB());
-      const app = buildAdminApp(svc);
-
-      const res = await app.request("/admin/flags", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: "flag_over", rollout_pct: 101 }),
-      });
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.error).toContain("rollout_pct");
+      await expect(svc.createFlag({ key: "flag_over", rollout_pct: 101 }))
+        .rejects.toThrow(ValidationError);
     });
 
-    it("rejects rollout_pct < 0 with 400", async () => {
+    it("rejects rollout_pct < 0", async () => {
       const svc = new FlagsService(mockDB());
-      const app = buildAdminApp(svc);
-
-      const res = await app.request("/admin/flags", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: "flag_neg", rollout_pct: -5 }),
-      });
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.error).toContain("rollout_pct");
+      await expect(svc.createFlag({ key: "flag_neg", rollout_pct: -5 }))
+        .rejects.toThrow(ValidationError);
     });
   });
 
-  describe("handleAdminUpdate", () => {
-    it("rejects rollout_pct < 0 with 400", async () => {
+  describe("updateFlag", () => {
+    it("rejects rollout_pct < 0", async () => {
       const db = mockDB({
         getFlag: vi.fn().mockResolvedValue(makeFlag()),
       });
       const svc = new FlagsService(db);
-      const app = buildAdminApp(svc);
-
-      const res = await app.request("/admin/flags/test_flag", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rollout_pct: -1 }),
-      });
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.error).toContain("rollout_pct");
+      await expect(svc.updateFlag("test_flag", { rollout_pct: -1 }))
+        .rejects.toThrow(ValidationError);
     });
 
-    it("rejects rollout_pct > 100 with 400", async () => {
+    it("rejects rollout_pct > 100", async () => {
       const db = mockDB({
         getFlag: vi.fn().mockResolvedValue(makeFlag()),
       });
       const svc = new FlagsService(db);
-      const app = buildAdminApp(svc);
-
-      const res = await app.request("/admin/flags/test_flag", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rollout_pct: 150 }),
-      });
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.error).toContain("rollout_pct");
+      await expect(svc.updateFlag("test_flag", { rollout_pct: 150 }))
+        .rejects.toThrow(ValidationError);
     });
   });
 
-  describe("handleAdminDelete", () => {
-    it("returns 404 for non-existent flag", async () => {
+  describe("deleteFlag", () => {
+    it("throws NotFoundError for non-existent flag", async () => {
       const db = mockDB({
         getFlag: vi.fn().mockResolvedValue(null),
       });
       const svc = new FlagsService(db);
-      const app = buildAdminApp(svc);
-
-      const res = await app.request("/admin/flags/nonexistent", { method: "DELETE" });
-      expect(res.status).toBe(404);
-      const body = await res.json();
-      expect(body.error).toContain("flag not found");
+      await expect(svc.deleteFlag("nonexistent"))
+        .rejects.toThrow(NotFoundError);
     });
   });
 
-  describe("handleAdminSetOverride", () => {
+  describe("setOverride", () => {
     it("requires user_id", async () => {
       const svc = new FlagsService(mockDB());
-      const app = buildAdminApp(svc);
-
-      const res = await app.request("/admin/flags/test_flag/overrides", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: true }),
-      });
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.error).toContain("user_id");
-    });
-
-    it("requires enabled field", async () => {
-      const svc = new FlagsService(mockDB());
-      const app = buildAdminApp(svc);
-
-      const res = await app.request("/admin/flags/test_flag/overrides", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: "user-1" }),
-      });
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.error).toContain("enabled");
+      await expect(svc.setOverride("test_flag", "", true))
+        .rejects.toThrow(ValidationError);
     });
   });
 
-  describe("handleAdminDeleteOverride", () => {
-    it("requires key and user_id (route params)", async () => {
-      const svc = new FlagsService(mockDB());
-      const app = buildAdminApp(svc);
-
-      // Valid route with both params should succeed
+  describe("deleteOverride", () => {
+    it("deletes override successfully", async () => {
       const deleteOverride = vi.fn().mockResolvedValue(undefined);
-      const db2 = mockDB({ deleteUserOverride: deleteOverride });
-      const svc2 = new FlagsService(db2);
-      const app2 = buildAdminApp(svc2);
+      const db = mockDB({ deleteUserOverride: deleteOverride });
+      const svc = new FlagsService(db);
 
-      const res = await app2.request("/admin/flags/my_flag/overrides/user-1", {
-        method: "DELETE",
-      });
-      expect(res.status).toBe(200);
+      await svc.deleteOverride("my_flag", "user-1");
       expect(deleteOverride).toHaveBeenCalledWith("my_flag", "user-1");
     });
   });

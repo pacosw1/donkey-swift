@@ -1,7 +1,4 @@
-// ── Service ─────────────────────────────────────────────────────────────────
-const HEADER_DEVICE_ID = "x-device-id";
-const HEADER_DEVICE_TOKEN = "x-device-token";
-const HEADER_IDEMPOTENCY_KEY = "x-idempotency-key";
+import { ValidationError, ServiceError } from "../errors/index.js";
 export class SyncService {
     db;
     handler;
@@ -33,23 +30,20 @@ export class SyncService {
             clearTimeout(timer);
         this.pendingPush.clear();
     }
-    /** GET /api/v1/sync/changes?since={ISO8601} */
-    handleSyncChanges = async (c) => {
-        const userId = c.get("userId");
-        const deviceId = c.req.header(HEADER_DEVICE_ID) || c.req.header(HEADER_DEVICE_TOKEN) || "";
+    async getChanges(userId, opts) {
+        const deviceId = opts?.deviceId ?? "";
         let syncedAt;
         try {
             syncedAt = await this.db.serverTime();
         }
         catch {
-            return c.json({ error: "failed to get server time" }, 500);
+            throw new ServiceError("INTERNAL", "failed to get server time");
         }
-        const sinceStr = c.req.query("since");
         let since = new Date(0);
-        if (sinceStr) {
-            const parsed = new Date(sinceStr);
+        if (opts?.since) {
+            const parsed = new Date(opts.since);
             if (isNaN(parsed.getTime()))
-                return c.json({ error: "invalid 'since' format, use ISO8601" }, 400);
+                throw new ValidationError("invalid 'since' format, use ISO8601");
             since = parsed;
         }
         let deleted;
@@ -57,7 +51,7 @@ export class SyncService {
             deleted = await this.db.tombstones(userId, since);
         }
         catch {
-            return c.json({ error: "failed to query tombstones" }, 500);
+            throw new ServiceError("INTERNAL", "failed to query tombstones");
         }
         const result = {
             deleted: deleted ?? [],
@@ -71,35 +65,32 @@ export class SyncService {
             }
         }
         catch {
-            return c.json({ error: "failed to query changes" }, 500);
+            throw new ServiceError("INTERNAL", "failed to query changes");
         }
-        return c.json(result);
-    };
-    /** POST /api/v1/sync/batch */
-    handleSyncBatch = async (c) => {
-        const userId = c.get("userId");
-        const deviceId = c.req.header(HEADER_DEVICE_ID) || c.req.header(HEADER_DEVICE_TOKEN) || "";
-        const rawIdempKey = c.req.header(HEADER_IDEMPOTENCY_KEY) ?? "";
+        return result;
+    }
+    async syncBatch(userId, items, opts) {
+        const deviceId = opts?.deviceId ?? "";
+        const rawIdempKey = opts?.idempotencyKey ?? "";
         const idempKey = rawIdempKey ? `${userId}:${rawIdempKey}` : "";
         // Check idempotency cache
         if (idempKey) {
             const cached = this.idempCache.get(idempKey);
             if (cached && Date.now() < cached.expiresAt) {
-                return c.json(cached.resp);
+                return cached.resp;
             }
         }
-        const body = await c.req.json();
-        if (!body.items?.length)
-            return c.json({ error: "items array is required" }, 400);
-        if (body.items.length > 500)
-            return c.json({ error: "maximum 500 items per batch" }, 400);
-        for (const item of body.items) {
+        if (!items?.length)
+            throw new ValidationError("items array is required");
+        if (items.length > 500)
+            throw new ValidationError("maximum 500 items per batch");
+        for (const item of items) {
             if (!item.client_id)
-                return c.json({ error: "items[].client_id is required" }, 400);
+                throw new ValidationError("items[].client_id is required");
             if (!item.entity_type)
-                return c.json({ error: "items[].entity_type is required" }, 400);
+                throw new ValidationError("items[].entity_type is required");
             if (item.version < 0)
-                return c.json({ error: "items[].version must be >= 0" }, 400);
+                throw new ValidationError("items[].version must be >= 0");
             if (!item.fields)
                 item.fields = {};
         }
@@ -108,18 +99,18 @@ export class SyncService {
             syncedAt = await this.db.serverTime();
         }
         catch {
-            return c.json({ error: "failed to get server time" }, 500);
+            throw new ServiceError("INTERNAL", "failed to get server time");
         }
-        let items;
+        let batchItems;
         let errors;
         try {
-            ({ items, errors } = await this.handler.batchUpsert(userId, deviceId, body.items));
+            ({ items: batchItems, errors } = await this.handler.batchUpsert(userId, deviceId, items));
         }
         catch {
-            return c.json({ error: "batch upsert failed" }, 500);
+            throw new ServiceError("INTERNAL", "batch upsert failed");
         }
         const resp = {
-            items: items ?? [],
+            items: batchItems ?? [],
             errors: errors ?? [],
             synced_at: syncedAt,
         };
@@ -129,31 +120,26 @@ export class SyncService {
         if (resp.items.length > 0) {
             this.notifyOtherDevices(userId, deviceId);
         }
-        return c.json(resp);
-    };
-    /** DELETE /api/v1/sync/:entity_type/:id */
-    handleSyncDelete = async (c) => {
-        const userId = c.get("userId");
-        const deviceId = c.req.header(HEADER_DEVICE_ID) || c.req.header(HEADER_DEVICE_TOKEN) || "";
-        const entityType = c.req.param("entity_type");
-        const entityId = c.req.param("id");
+        return resp;
+    }
+    async deleteEntity(userId, entityType, entityId, deviceId) {
         if (!entityType || !entityId)
-            return c.json({ error: "entity_type and id are required" }, 400);
+            throw new ValidationError("entity_type and id are required");
         try {
             await this.handler.delete(userId, entityType, entityId);
         }
         catch {
-            return c.json({ error: "failed to delete entity" }, 500);
+            throw new ServiceError("INTERNAL", "failed to delete entity");
         }
         try {
             await this.db.recordTombstone(userId, entityType, entityId);
         }
         catch {
-            return c.json({ error: "failed to record tombstone" }, 500);
+            throw new ServiceError("INTERNAL", "failed to record tombstone");
         }
-        this.notifyOtherDevices(userId, deviceId);
-        return c.json({ status: "deleted" });
-    };
+        this.notifyOtherDevices(userId, deviceId ?? "");
+        return { status: "deleted" };
+    }
     /** Notify other devices of a sync event. Debounced per user. */
     notifyOtherDevices(userId, excludeDeviceId = "") {
         if (!this.push || !this.tokens) {

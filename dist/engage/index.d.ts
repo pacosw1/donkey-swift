@@ -1,4 +1,3 @@
-import type { Context } from "hono";
 export interface EngageDB {
     trackEvents(userId: string, events: EventInput[]): Promise<void>;
     updateSubscription(userId: string, productId: string, status: string, expiresAt: Date | string | null): Promise<void>;
@@ -46,54 +45,46 @@ export declare class EngageService {
     private eventHooks;
     constructor(cfg: EngageConfig, db: EngageDB);
     registerEventHook(hook: EventHook): void;
-    /** POST /api/v1/events */
-    handleTrackEvents: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
+    trackEvents(userId: string, events: Array<{
+        event: string;
+        metadata?: unknown;
+        timestamp?: string;
+    }>): Promise<{
         tracked: number;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
-    /** PUT /api/v1/subscription */
-    handleUpdateSubscription: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
-        user_id: string;
-        product_id: string;
+    }>;
+    updateSubscription(userId: string, input: {
+        product_id?: string;
+        status?: string;
+        expires_at?: string;
+        original_transaction_id?: string;
+        price_cents?: number;
+        currency_code?: string;
+    }): Promise<UserSubscription | {
         status: string;
-        expires_at: string | null;
-        started_at: string | null;
-        updated_at: string;
-    } | {
+    }>;
+    reportSession(userId: string, input: {
+        session_id: string;
+        action: "start" | "end";
+        app_version?: string;
+        os_version?: string;
+        country?: string;
+        duration_s?: number;
+    }): Promise<{
         status: string;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
-    /** POST /api/v1/sessions */
-    handleSessionReport: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
-        status: string;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
-    /** GET /api/v1/user/eligibility */
-    handleGetEligibility: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
+    }>;
+    getEligibility(userId: string): Promise<{
         paywall_trigger: string | null;
         days_active: number;
         total_logs: number;
         streak: number;
         is_pro: boolean;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
-    /** POST /api/v1/feedback */
-    handleSubmitFeedback: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">) | (Response & import("hono").TypedResponse<{
+    }>;
+    submitFeedback(userId: string, input: {
+        type?: string;
+        message: string;
+        app_version?: string;
+    }): Promise<{
         status: string;
-    }, 201, "json">)>;
+    }>;
 }
 //# sourceMappingURL=index.d.ts.map

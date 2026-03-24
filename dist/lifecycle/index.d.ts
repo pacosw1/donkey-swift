@@ -1,4 +1,3 @@
-import type { Context } from "hono";
 import type { PushProvider } from "../push/index.js";
 export type Stage = "new" | "activated" | "engaged" | "monetized" | "loyal" | "at_risk" | "dormant" | "churned";
 export type PromptType = "review" | "paywall" | "winback" | "milestone";
@@ -96,31 +95,8 @@ export declare class LifecycleService {
     private checkAhaMoment;
     private determineStage;
     determinePrompt(userId: string, es: EngagementScore): Promise<Prompt | null>;
-    /** GET /api/v1/user/lifecycle */
-    handleGetLifecycle: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        user_id: string;
-        stage: Stage;
-        score: number;
-        days_since_active: number;
-        total_sessions: number;
-        aha_reached: boolean;
-        is_pro: boolean;
-        created_days_ago: number;
-        prompt?: {
-            type: PromptType;
-            title: string;
-            body: string;
-            reason: string;
-        } | null | undefined;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">) | (Response & import("hono").TypedResponse<{
-        error: string;
-    }, 500, "json">)>;
-    /** POST /api/v1/user/lifecycle/ack */
-    handleAckPrompt: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
-        error: string;
-    }, 400, "json">) | (Response & import("hono").TypedResponse<{
-        status: string;
-    }, import("hono/utils/http-status").ContentfulStatusCode, "json">)>;
+    /** Acknowledge a lifecycle prompt (shown, accepted, or dismissed). */
+    ackPrompt(userId: string, promptType: string, action: string): Promise<void>;
     /** Evaluate users and send winback pushes to at-risk/dormant/churned users. */
     evaluateNotifications(userIds: string[]): Promise<void>;
 }

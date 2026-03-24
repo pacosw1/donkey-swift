@@ -1,3 +1,4 @@
+// ── Types ───────────────────────────────────────────────────────────────────
 // ── Store ───────────────────────────────────────────────────────────────────
 export class PaywallStore {
     configs;
@@ -19,25 +20,5 @@ export class PaywallStore {
         const stored = { ...config, version: existing ? existing.version + 1 : 1 };
         this.configs.set(locale, stored);
     }
-}
-// ── Handlers ────────────────────────────────────────────────────────────────
-/** GET /api/v1/paywall/config?locale=en */
-export function handleGetConfig(store) {
-    return async (c) => {
-        const locale = c.req.query("locale") ?? "en";
-        const config = store.get(locale);
-        if (!config)
-            return c.json({ error: "no paywall config available" }, 404);
-        return c.json(config);
-    };
-}
-/** PUT /admin/api/paywall/config?locale=en */
-export function handleUpdateConfig(store) {
-    return async (c) => {
-        const locale = c.req.query("locale") ?? "en";
-        const config = await c.req.json();
-        store.set(locale, config);
-        return c.json({ status: "updated", locale, version: config.version });
-    };
 }
 //# sourceMappingURL=index.js.map
