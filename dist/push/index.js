@@ -77,8 +77,8 @@ export class LogProvider {
     async sendSilent(deviceToken, data) {
         console.log(`[push/log] SILENT token=${deviceToken.slice(0, 16)} data=${JSON.stringify(data)}`);
     }
-    async sendRich(deviceToken, payload) {
-        console.log(`[push/log] RICH token=${deviceToken.slice(0, 16)} payload=${JSON.stringify(payload)}`);
+    async sendRich(deviceToken, payload, headers) {
+        console.log(`[push/log] RICH token=${deviceToken.slice(0, 16)} payload=${JSON.stringify(payload)}${headers?.topic ? ` topic=${headers.topic}` : ""}`);
         return { success: true };
     }
 }

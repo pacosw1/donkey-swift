@@ -47,6 +47,8 @@ export interface BatchResponse {
 export interface DeviceInfo {
     deviceId: string;
     token: string;
+    /** APNs topic override (e.g. for watchOS devices). Passed through to push headers. */
+    apnsTopic?: string;
 }
 export interface SyncConfig {
     push?: PushProvider;

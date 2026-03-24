@@ -27,6 +27,8 @@ export interface DeviceToken {
   app_version: string;
   enabled: boolean;
   last_seen_at: Date | string;
+  /** APNs topic override for this device (e.g. "com.app.watchkitapp" for watchOS). Falls back to PushConfig.topic if not set. */
+  apns_topic?: string;
 }
 
 export interface NotificationPreferences {
@@ -70,6 +72,7 @@ export class NotifyService {
       device_model?: string;
       os_version?: string;
       app_version?: string;
+      apns_topic?: string;
     }>();
 
     if (!body.token) return c.json({ error: "token is required" }, 400);
@@ -88,6 +91,7 @@ export class NotifyService {
       app_version: body.app_version ?? "",
       enabled: true,
       last_seen_at: new Date(),
+      apns_topic: body.apns_topic,
     };
 
     try {
@@ -304,6 +308,10 @@ export function getHourInTimezone(date: Date, timezone: string): number {
  * Example tick function. Replace with your app-specific notification logic.
  * This exists as a reference — do not use in production without customizing the copy.
  */
+/**
+ * Example tick function. Replace with your app-specific notification logic.
+ * Uses sendRich when available to pass per-device APNs topic (for watchOS support).
+ */
 export async function exampleTick(
   userId: string,
   _prefs: NotificationPreferences,
@@ -312,7 +320,13 @@ export async function exampleTick(
 ): Promise<void> {
   for (const token of tokens) {
     try {
-      await push.send(token.token, "Reminder", "Don't forget to check in today.");
+      if (push.sendRich && token.apns_topic) {
+        await push.sendRich(token.token, {
+          aps: { alert: { title: "Reminder", body: "Don't forget to check in today." }, sound: "default" },
+        }, { topic: token.apns_topic });
+      } else {
+        await push.send(token.token, "Reminder", "Don't forget to check in today.");
+      }
     } catch (err) {
       console.log(`[notify-scheduler] push failed for ${userId}: ${err}`);
     }

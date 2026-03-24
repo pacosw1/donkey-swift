@@ -20,7 +20,7 @@ export interface PushProvider {
   sendWithData(deviceToken: string, title: string, body: string, data: Record<string, string>): Promise<void>;
   sendSilent(deviceToken: string, data: Record<string, string>): Promise<void>;
   /** Send a rich notification with full APNs payload control. */
-  sendRich?(deviceToken: string, payload: APNsPayload): Promise<PushResult>;
+  sendRich?(deviceToken: string, payload: APNsPayload, headers?: APNsHeaders): Promise<PushResult>;
 }
 
 // ── APNs Payload Types ──────────────────────────────────────────────────────
@@ -211,8 +211,8 @@ export class LogProvider implements PushProvider {
   async sendSilent(deviceToken: string, data: Record<string, string>): Promise<void> {
     console.log(`[push/log] SILENT token=${deviceToken.slice(0, 16)} data=${JSON.stringify(data)}`);
   }
-  async sendRich(deviceToken: string, payload: APNsPayload): Promise<PushResult> {
-    console.log(`[push/log] RICH token=${deviceToken.slice(0, 16)} payload=${JSON.stringify(payload)}`);
+  async sendRich(deviceToken: string, payload: APNsPayload, headers?: APNsHeaders): Promise<PushResult> {
+    console.log(`[push/log] RICH token=${deviceToken.slice(0, 16)} payload=${JSON.stringify(payload)}${headers?.topic ? ` topic=${headers.topic}` : ""}`);
     return { success: true };
   }
 }

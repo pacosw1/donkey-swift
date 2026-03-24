@@ -55,6 +55,8 @@ export interface BatchResponse {
 export interface DeviceInfo {
   deviceId: string;
   token: string;
+  /** APNs topic override (e.g. for watchOS devices). Passed through to push headers. */
+  apnsTopic?: string;
 }
 
 export interface SyncConfig {
@@ -276,7 +278,10 @@ export class SyncService {
           continue;
         }
         const short = `...${d.token.slice(-8)}`;
-        this.push!.sendSilent(d.token, data).then(() => {
+        const sendFn = (d.apnsTopic && this.push!.sendRich)
+          ? this.push!.sendRich(d.token, { aps: { "content-available": 1 }, ...data }, { pushType: "background", priority: "5", topic: d.apnsTopic })
+          : this.push!.sendSilent(d.token, data);
+        sendFn.then(() => {
           console.log(`[sync] push sent OK to ${short}`);
         }).catch((err) => {
           console.log(`[sync] push FAILED for ${short}: ${err}`);

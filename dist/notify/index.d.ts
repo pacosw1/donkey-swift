@@ -22,6 +22,8 @@ export interface DeviceToken {
     app_version: string;
     enabled: boolean;
     last_seen_at: Date | string;
+    /** APNs topic override for this device (e.g. "com.app.watchkitapp" for watchOS). Falls back to PushConfig.topic if not set. */
+    apns_topic?: string;
 }
 export interface NotificationPreferences {
     user_id: string;
@@ -124,6 +126,10 @@ export declare function getHourInTimezone(date: Date, timezone: string): number;
 /**
  * Example tick function. Replace with your app-specific notification logic.
  * This exists as a reference — do not use in production without customizing the copy.
+ */
+/**
+ * Example tick function. Replace with your app-specific notification logic.
+ * Uses sendRich when available to pass per-device APNs topic (for watchOS support).
  */
 export declare function exampleTick(userId: string, _prefs: NotificationPreferences, tokens: DeviceToken[], push: PushProvider): Promise<void>;
 //# sourceMappingURL=index.d.ts.map

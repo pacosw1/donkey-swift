@@ -193,6 +193,7 @@ export const userDeviceTokens = pgTable(
     appVersion: text("app_version").notNull().default(""),
     enabled: boolean("enabled").notNull().default(true),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    apnsTopic: text("apns_topic"),
   },
   (table) => [
     uniqueIndex("user_device_tokens_user_id_token_key").on(table.userId, table.token),

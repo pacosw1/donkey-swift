@@ -34,6 +34,7 @@ export class NotifyService {
             app_version: body.app_version ?? "",
             enabled: true,
             last_seen_at: new Date(),
+            apns_topic: body.apns_topic,
         };
         try {
             await this.db.upsertDeviceToken(dt);
@@ -217,10 +218,21 @@ export function getHourInTimezone(date, timezone) {
  * Example tick function. Replace with your app-specific notification logic.
  * This exists as a reference — do not use in production without customizing the copy.
  */
+/**
+ * Example tick function. Replace with your app-specific notification logic.
+ * Uses sendRich when available to pass per-device APNs topic (for watchOS support).
+ */
 export async function exampleTick(userId, _prefs, tokens, push) {
     for (const token of tokens) {
         try {
-            await push.send(token.token, "Reminder", "Don't forget to check in today.");
+            if (push.sendRich && token.apns_topic) {
+                await push.sendRich(token.token, {
+                    aps: { alert: { title: "Reminder", body: "Don't forget to check in today." }, sound: "default" },
+                }, { topic: token.apns_topic });
+            }
+            else {
+                await push.send(token.token, "Reminder", "Don't forget to check in today.");
+            }
         }
         catch (err) {
             console.log(`[notify-scheduler] push failed for ${userId}: ${err}`);

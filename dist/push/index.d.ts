@@ -12,7 +12,7 @@ export interface PushProvider {
     sendWithData(deviceToken: string, title: string, body: string, data: Record<string, string>): Promise<void>;
     sendSilent(deviceToken: string, data: Record<string, string>): Promise<void>;
     /** Send a rich notification with full APNs payload control. */
-    sendRich?(deviceToken: string, payload: APNsPayload): Promise<PushResult>;
+    sendRich?(deviceToken: string, payload: APNsPayload, headers?: APNsHeaders): Promise<PushResult>;
 }
 export interface APNsAlert {
     title: string;
@@ -132,7 +132,7 @@ export declare class LogProvider implements PushProvider {
     send(deviceToken: string, title: string, body: string): Promise<void>;
     sendWithData(deviceToken: string, title: string, body: string, data: Record<string, string>): Promise<void>;
     sendSilent(deviceToken: string, data: Record<string, string>): Promise<void>;
-    sendRich(deviceToken: string, payload: APNsPayload): Promise<PushResult>;
+    sendRich(deviceToken: string, payload: APNsPayload, headers?: APNsHeaders): Promise<PushResult>;
 }
 export declare class NoopProvider implements PushProvider {
     send(): Promise<void>;
