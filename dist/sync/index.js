@@ -1,5 +1,6 @@
 // ── Service ─────────────────────────────────────────────────────────────────
 const HEADER_DEVICE_ID = "x-device-id";
+const HEADER_DEVICE_TOKEN = "x-device-token";
 const HEADER_IDEMPOTENCY_KEY = "x-idempotency-key";
 export class SyncService {
     db;
@@ -35,7 +36,7 @@ export class SyncService {
     /** GET /api/v1/sync/changes?since={ISO8601} */
     handleSyncChanges = async (c) => {
         const userId = c.get("userId");
-        const deviceId = c.req.header(HEADER_DEVICE_ID) ?? "";
+        const deviceId = c.req.header(HEADER_DEVICE_ID) || c.req.header(HEADER_DEVICE_TOKEN) || "";
         let syncedAt;
         try {
             syncedAt = await this.db.serverTime();
@@ -77,7 +78,7 @@ export class SyncService {
     /** POST /api/v1/sync/batch */
     handleSyncBatch = async (c) => {
         const userId = c.get("userId");
-        const deviceId = c.req.header(HEADER_DEVICE_ID) ?? "";
+        const deviceId = c.req.header(HEADER_DEVICE_ID) || c.req.header(HEADER_DEVICE_TOKEN) || "";
         const rawIdempKey = c.req.header(HEADER_IDEMPOTENCY_KEY) ?? "";
         const idempKey = rawIdempKey ? `${userId}:${rawIdempKey}` : "";
         // Check idempotency cache
@@ -133,7 +134,7 @@ export class SyncService {
     /** DELETE /api/v1/sync/:entity_type/:id */
     handleSyncDelete = async (c) => {
         const userId = c.get("userId");
-        const deviceId = c.req.header(HEADER_DEVICE_ID) ?? "";
+        const deviceId = c.req.header(HEADER_DEVICE_ID) || c.req.header(HEADER_DEVICE_TOKEN) || "";
         const entityType = c.req.param("entity_type");
         const entityId = c.req.param("id");
         if (!entityType || !entityId)
@@ -181,8 +182,9 @@ export class SyncService {
             const data = { action: "sync" };
             let sent = 0;
             for (const d of devices) {
-                if (excludeDeviceId && d.deviceId && d.deviceId === excludeDeviceId) {
-                    console.log(`[sync] skip device ${d.deviceId} (requester)`);
+                // Exclude by deviceId OR by token (iOS sends token as X-Device-Token)
+                if (excludeDeviceId && (d.deviceId === excludeDeviceId || d.token === excludeDeviceId)) {
+                    console.log(`[sync] skip device ...${d.token.slice(-8)} (requester)`);
                     continue;
                 }
                 const short = `...${d.token.slice(-8)}`;
