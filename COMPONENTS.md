@@ -6,7 +6,7 @@ Framework-agnostic TypeScript services for iOS app backends. Pure business logic
 
 Typed errors thrown by services. Map to HTTP status codes in your route handlers.
 
-### Classes
+### Functions
 
 ```typescript
 class ServiceError extends Error { code: string }
@@ -31,7 +31,7 @@ function errorToStatus(err: ServiceError): number
 
 Framework-agnostic utilities for rate limiting, token extraction, and request ID generation. No HTTP framework dependency.
 
-### Classes
+### Functions
 
 ```typescript
 class RateLimiter {
@@ -73,7 +73,7 @@ interface SqlExecutor {
 }
 ```
 
-### Service
+### Functions
 
 ```typescript
 class MigrationRunner {
@@ -102,7 +102,7 @@ interface HealthConfig {
 }
 ```
 
-### Service
+### Functions
 
 ```typescript
 class HealthService {
@@ -127,7 +127,7 @@ function pushCheck(name: string, tokenFn: () => Promise<unknown>): Check
 
 Ring-buffer log capture for admin panels.
 
-### Service
+### Functions
 
 ```typescript
 class LogBuffer {
@@ -170,7 +170,7 @@ interface SchedulerConfig {
 }
 ```
 
-### Service
+### Functions
 
 ```typescript
 class Scheduler {
@@ -239,7 +239,7 @@ interface AuthConfig {
 }
 ```
 
-### Service
+### Functions
 
 ```typescript
 class AuthService {
@@ -314,7 +314,7 @@ interface EngageConfig {
 }
 ```
 
-### Service
+### Functions
 
 ```typescript
 class EngageService {
@@ -409,7 +409,7 @@ interface NotifySchedulerConfig {
 }
 ```
 
-### Service
+### Functions
 
 ```typescript
 class NotifyService {
@@ -520,7 +520,7 @@ interface PushConfig {
 }
 ```
 
-### Service
+### Functions
 
 ```typescript
 class APNsProvider implements PushProvider {
@@ -614,7 +614,7 @@ interface WSEvent {
 }
 ```
 
-### Service
+### Functions
 
 ```typescript
 class ChatService {
@@ -659,7 +659,7 @@ interface EmailTemplate {
 }
 ```
 
-### Service
+### Functions
 
 ```typescript
 class SMTPProvider implements EmailProvider {
@@ -758,7 +758,7 @@ interface SyncConfig {
 }
 ```
 
-### Service
+### Functions
 
 ```typescript
 class SyncService {
@@ -795,7 +795,7 @@ interface StorageConfig {
 }
 ```
 
-### Service
+### Functions
 
 ```typescript
 class StorageClient implements StorageProvider {
@@ -881,7 +881,7 @@ const SUBSCRIPTION_STATUSES: readonly ["active", "expired", "cancelled", "trial"
 type SubscriptionStatus = typeof SUBSCRIPTION_STATUSES[number]
 ```
 
-### Service
+### Functions
 
 ```typescript
 class ReceiptService {
@@ -971,7 +971,7 @@ interface MassExtendResponse {
 const SUBSCRIPTION_STATUS_CODES: { 1: "active"; 2: "expired"; 3: "billing_retry"; 4: "grace_period"; 5: "revoked" }
 ```
 
-### Service
+### Functions
 
 ```typescript
 class AppStoreServerClient {
@@ -1038,7 +1038,7 @@ interface PaywallConfig {
 }
 ```
 
-### Service
+### Functions
 
 ```typescript
 class PaywallStore {
@@ -1075,7 +1075,7 @@ interface AttestConfig {
 }
 ```
 
-### Service
+### Functions
 
 ```typescript
 class AttestService {
@@ -1137,7 +1137,7 @@ interface AccountConfig {
 }
 ```
 
-### Service
+### Functions
 
 ```typescript
 class AccountService {
@@ -1189,7 +1189,7 @@ interface FlagsConfig {
 }
 ```
 
-### Service
+### Functions
 
 ```typescript
 class FlagsService {
@@ -1299,7 +1299,7 @@ interface LifecycleConfig {
 }
 ```
 
-### Service
+### Functions
 
 ```typescript
 class LifecycleService {
@@ -1347,7 +1347,7 @@ interface RevenueRow { date: string; revenue_cents: number; }
 interface RetentionRow { cohort_date: string; day: number; retained_pct: number; users: number; }
 ```
 
-### Service
+### Functions
 
 ```typescript
 class AnalyticsService {
