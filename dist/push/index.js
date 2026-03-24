@@ -1,5 +1,6 @@
 import * as jose from "jose";
 import { readFile } from "node:fs/promises";
+import * as http2 from "node:http2";
 /** Creates a push provider. Returns APNs if keyPath is set, LogProvider otherwise. */
 export async function newProvider(cfg) {
     if (!cfg.keyPath) {
@@ -43,6 +44,7 @@ export class APNsProvider {
     baseUrl;
     cachedToken = null;
     tokenExpiry = 0;
+    _h2client = null;
     constructor(key, cfg) {
         this.key = key;
         this.keyId = cfg.keyId;
@@ -88,25 +90,57 @@ export class APNsProvider {
         };
         await this.sendPayload(deviceToken, payload, "background", "5");
     }
+    getH2Client() {
+        if (this._h2client && !this._h2client.destroyed && !this._h2client.closed) {
+            return this._h2client;
+        }
+        this._h2client = http2.connect(this.baseUrl);
+        this._h2client.on("error", () => { });
+        return this._h2client;
+    }
     async sendPayload(deviceToken, payload, pushType, priority) {
         const token = await this.getToken();
-        const url = `${this.baseUrl}/3/device/${deviceToken}`;
-        const res = await fetch(url, {
-            method: "POST",
-            headers: {
-                authorization: `bearer ${token}`,
+        const client = this.getH2Client();
+        const body = JSON.stringify(payload);
+        return new Promise((resolve, reject) => {
+            const req = client.request({
+                [http2.constants.HTTP2_HEADER_METHOD]: "POST",
+                [http2.constants.HTTP2_HEADER_PATH]: `/3/device/${deviceToken}`,
+                "authorization": `bearer ${token}`,
                 "apns-topic": this.topic,
                 "apns-push-type": pushType,
                 "apns-priority": priority,
                 "apns-expiration": "0",
                 "content-type": "application/json",
-            },
-            body: JSON.stringify(payload),
+            });
+            let status = 0;
+            let responseData = "";
+            req.on("response", (headers) => {
+                status = Number(headers[http2.constants.HTTP2_HEADER_STATUS]);
+            });
+            req.on("data", (chunk) => {
+                responseData += chunk.toString();
+            });
+            req.on("end", () => {
+                if (status === 200) {
+                    resolve();
+                }
+                else {
+                    let reason = "unknown";
+                    try {
+                        const parsed = JSON.parse(responseData);
+                        if (parsed.reason)
+                            reason = parsed.reason;
+                    }
+                    catch { }
+                    reject(new Error(`apns error ${status}: ${reason}`));
+                }
+            });
+            req.on("error", (err) => {
+                reject(err);
+            });
+            req.end(body);
         });
-        if (!res.ok) {
-            const err = (await res.json().catch(() => ({})));
-            throw new Error(`apns error ${res.status}: ${err.reason ?? "unknown"}`);
-        }
     }
 }
 //# sourceMappingURL=index.js.map

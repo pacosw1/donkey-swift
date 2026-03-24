@@ -60,6 +60,9 @@ export interface AdminConfig {
 
 /** Middleware that checks admin API key or admin email JWT. */
 export function requireAdmin(cfg: AdminConfig): MiddlewareHandler {
+  if (cfg.parseToken && !cfg.getUserEmail) {
+    console.warn("[middleware] requireAdmin: parseToken provided without getUserEmail — session cookie auth will not work");
+  }
   return async (c, next) => {
     let authenticated = false;
 

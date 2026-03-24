@@ -167,6 +167,12 @@ export class ChatService {
     getHub() {
         return this.hub;
     }
+    /** Call from your WebSocket open handler to register a connection. Returns a cleanup function. */
+    handleWSConnection(ws, userId, role) {
+        const conn = { ws, userId, role };
+        this.hub.register(conn);
+        return () => this.hub.unregister(conn);
+    }
     broadcastChatMessage(msg) {
         const event = {
             type: "new_message",

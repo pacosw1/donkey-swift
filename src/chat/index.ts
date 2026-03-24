@@ -4,6 +4,7 @@ import type { PushProvider } from "../push/index.js";
 // ── Types & Interfaces ──────────────────────────────────────────────────────
 
 export interface ChatDB {
+  /** Returns messages ordered by created_at ASC (oldest first). */
   getChatMessages(userId: string, limit: number, offset: number): Promise<ChatMessage[]>;
   getChatMessagesSince(userId: string, sinceId: number): Promise<ChatMessage[]>;
   sendChatMessage(userId: string, sender: string, message: string, messageType: string): Promise<ChatMessage>;
@@ -35,7 +36,7 @@ export interface ChatThread {
 
 export interface ChatConfig {
   parseToken: (token: string) => Promise<string>;
-  adminAuth?: (req: Request) => boolean;
+  adminAuth?: (req: Request) => boolean | Promise<boolean>;
   adminDisplayName?: string;
 }
 
@@ -46,7 +47,7 @@ export interface WSEvent {
 
 // ── WebSocket Hub ───────────────────────────────────────────────────────────
 
-interface WSConn {
+export interface WSConn {
   ws: WebSocket;
   userId: string;
   role: string;
@@ -212,6 +213,13 @@ export class ChatService {
   /** Get the Hub for WebSocket upgrade handlers. */
   getHub(): Hub {
     return this.hub;
+  }
+
+  /** Call from your WebSocket open handler to register a connection. Returns a cleanup function. */
+  handleWSConnection(ws: WebSocket, userId: string, role: "user" | "admin"): () => void {
+    const conn: WSConn = { ws, userId, role };
+    this.hub.register(conn);
+    return () => this.hub.unregister(conn);
   }
 
   private broadcastChatMessage(msg: ChatMessage): void {

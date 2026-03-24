@@ -33,12 +33,14 @@ export declare class APNsProvider implements PushProvider {
     private baseUrl;
     private cachedToken;
     private tokenExpiry;
+    private _h2client;
     private constructor();
     static create(cfg: PushConfig): Promise<APNsProvider>;
     private getToken;
     send(deviceToken: string, title: string, body: string): Promise<void>;
     sendWithData(deviceToken: string, title: string, body: string, data: Record<string, string>): Promise<void>;
     sendSilent(deviceToken: string, data: Record<string, string>): Promise<void>;
+    private getH2Client;
     private sendPayload;
 }
 //# sourceMappingURL=index.d.ts.map

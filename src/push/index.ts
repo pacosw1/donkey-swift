@@ -1,5 +1,6 @@
 import * as jose from "jose";
 import { readFile } from "node:fs/promises";
+import * as http2 from "node:http2";
 
 // ── Provider Interface ──────────────────────────────────────────────────────
 
@@ -70,6 +71,7 @@ export class APNsProvider implements PushProvider {
   private baseUrl: string;
   private cachedToken: string | null = null;
   private tokenExpiry = 0;
+  private _h2client: http2.ClientHttp2Session | null = null;
 
   private constructor(key: CryptoKey, cfg: PushConfig) {
     this.key = key;
@@ -132,6 +134,15 @@ export class APNsProvider implements PushProvider {
     await this.sendPayload(deviceToken, payload, "background", "5");
   }
 
+  private getH2Client(): http2.ClientHttp2Session {
+    if (this._h2client && !this._h2client.destroyed && !this._h2client.closed) {
+      return this._h2client;
+    }
+    this._h2client = http2.connect(this.baseUrl);
+    this._h2client.on("error", () => {});
+    return this._h2client;
+  }
+
   private async sendPayload(
     deviceToken: string,
     payload: Record<string, unknown>,
@@ -139,24 +150,50 @@ export class APNsProvider implements PushProvider {
     priority: string
   ): Promise<void> {
     const token = await this.getToken();
-    const url = `${this.baseUrl}/3/device/${deviceToken}`;
+    const client = this.getH2Client();
+    const body = JSON.stringify(payload);
 
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        authorization: `bearer ${token}`,
+    return new Promise<void>((resolve, reject) => {
+      const req = client.request({
+        [http2.constants.HTTP2_HEADER_METHOD]: "POST",
+        [http2.constants.HTTP2_HEADER_PATH]: `/3/device/${deviceToken}`,
+        "authorization": `bearer ${token}`,
         "apns-topic": this.topic,
         "apns-push-type": pushType,
         "apns-priority": priority,
         "apns-expiration": "0",
         "content-type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
+      });
 
-    if (!res.ok) {
-      const err = (await res.json().catch(() => ({}))) as { reason?: string };
-      throw new Error(`apns error ${res.status}: ${err.reason ?? "unknown"}`);
-    }
+      let status = 0;
+      let responseData = "";
+
+      req.on("response", (headers) => {
+        status = Number(headers[http2.constants.HTTP2_HEADER_STATUS]);
+      });
+
+      req.on("data", (chunk: Buffer) => {
+        responseData += chunk.toString();
+      });
+
+      req.on("end", () => {
+        if (status === 200) {
+          resolve();
+        } else {
+          let reason = "unknown";
+          try {
+            const parsed = JSON.parse(responseData) as { reason?: string };
+            if (parsed.reason) reason = parsed.reason;
+          } catch {}
+          reject(new Error(`apns error ${status}: ${reason}`));
+        }
+      });
+
+      req.on("error", (err) => {
+        reject(err);
+      });
+
+      req.end(body);
+    });
   }
 }

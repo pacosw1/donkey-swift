@@ -1,6 +1,7 @@
 import type { Context } from "hono";
 import type { PushProvider } from "../push/index.js";
 export interface ChatDB {
+    /** Returns messages ordered by created_at ASC (oldest first). */
     getChatMessages(userId: string, limit: number, offset: number): Promise<ChatMessage[]>;
     getChatMessagesSince(userId: string, sinceId: number): Promise<ChatMessage[]>;
     sendChatMessage(userId: string, sender: string, message: string, messageType: string): Promise<ChatMessage>;
@@ -29,14 +30,14 @@ export interface ChatThread {
 }
 export interface ChatConfig {
     parseToken: (token: string) => Promise<string>;
-    adminAuth?: (req: Request) => boolean;
+    adminAuth?: (req: Request) => boolean | Promise<boolean>;
     adminDisplayName?: string;
 }
 export interface WSEvent {
     type: string;
     payload?: unknown;
 }
-interface WSConn {
+export interface WSConn {
     ws: WebSocket;
     userId: string;
     role: string;
@@ -120,8 +121,9 @@ export declare class ChatService {
     }, 201, "json">)>;
     /** Get the Hub for WebSocket upgrade handlers. */
     getHub(): Hub;
+    /** Call from your WebSocket open handler to register a connection. Returns a cleanup function. */
+    handleWSConnection(ws: WebSocket, userId: string, role: "user" | "admin"): () => void;
     private broadcastChatMessage;
     private sendChatPush;
 }
-export {};
 //# sourceMappingURL=index.d.ts.map
