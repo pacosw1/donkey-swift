@@ -62,7 +62,31 @@ describe("NotifyService", () => {
       const svc = new NotifyService(mockNotifyDB(), mockPush());
       await expect(
         svc.registerDevice("user-1", { token: "a".repeat(201) })
+      ).rejects.toThrow(ValidationError);
+      await expect(
+        svc.registerDevice("user-1", { token: "a".repeat(201) })
       ).rejects.toThrow(/token.*long/i);
+    });
+
+    it("rejects device_model > 100 chars", async () => {
+      const svc = new NotifyService(mockNotifyDB(), mockPush());
+      await expect(
+        svc.registerDevice("user-1", { token: "valid-token", device_model: "x".repeat(101) })
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it("rejects os_version > 50 chars", async () => {
+      const svc = new NotifyService(mockNotifyDB(), mockPush());
+      await expect(
+        svc.registerDevice("user-1", { token: "valid-token", os_version: "x".repeat(51) })
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it("rejects app_version > 50 chars", async () => {
+      const svc = new NotifyService(mockNotifyDB(), mockPush());
+      await expect(
+        svc.registerDevice("user-1", { token: "valid-token", app_version: "x".repeat(51) })
+      ).rejects.toThrow(ValidationError);
     });
 
     it("registers successfully", async () => {
@@ -76,7 +100,6 @@ describe("NotifyService", () => {
         os_version: "17.0",
         app_version: "1.0.0",
       });
-
       expect(result.status).toBe("registered");
       expect(db.upsertDeviceToken).toHaveBeenCalled();
       expect(db.ensureNotificationPreferences).toHaveBeenCalledWith("user-1");
@@ -96,15 +119,30 @@ describe("NotifyService", () => {
   describe("disableDevice", () => {
     it("rejects missing token", async () => {
       const svc = new NotifyService(mockNotifyDB(), mockPush());
-      await expect(svc.disableDevice("user-1", "")).rejects.toThrow(/token/i);
+      await expect(
+        svc.disableDevice("user-1", "")
+      ).rejects.toThrow(ValidationError);
+      await expect(
+        svc.disableDevice("user-1", "")
+      ).rejects.toThrow(/token/i);
     });
 
     it("disables successfully", async () => {
       const db = mockNotifyDB();
       const svc = new NotifyService(db, mockPush());
-      const result = await svc.disableDevice("user-1", "some-token");
+      const result = await svc.disableDevice("user-1", "apns-token-abc");
       expect(result.status).toBe("disabled");
-      expect(db.disableDeviceToken).toHaveBeenCalledWith("user-1", "some-token");
+      expect(db.disableDeviceToken).toHaveBeenCalledWith("user-1", "apns-token-abc");
+    });
+
+    it("throws ServiceError when DB fails", async () => {
+      const db = mockNotifyDB({
+        disableDeviceToken: vi.fn().mockRejectedValue(new Error("db down")),
+      });
+      const svc = new NotifyService(db, mockPush());
+      await expect(
+        svc.disableDevice("user-1", "some-token")
+      ).rejects.toThrow(ServiceError);
     });
   });
 
@@ -121,11 +159,22 @@ describe("NotifyService", () => {
       expect(result.interval_seconds).toBe(3600);
       expect(result.wake_hour).toBe(8);
     });
+
+    it("throws ServiceError when DB fails", async () => {
+      const db = mockNotifyDB({
+        getNotificationPreferences: vi.fn().mockRejectedValue(new Error("db down")),
+      });
+      const svc = new NotifyService(db, mockPush());
+      await expect(svc.getPreferences("user-1")).rejects.toThrow(ServiceError);
+    });
   });
 
   describe("updatePreferences", () => {
     it("rejects interval < 300", async () => {
       const svc = new NotifyService(mockNotifyDB(), mockPush());
+      await expect(
+        svc.updatePreferences("user-1", { interval_seconds: 100 })
+      ).rejects.toThrow(ValidationError);
       await expect(
         svc.updatePreferences("user-1", { interval_seconds: 100 })
       ).rejects.toThrow(/interval_seconds/i);
@@ -135,7 +184,24 @@ describe("NotifyService", () => {
       const svc = new NotifyService(mockNotifyDB(), mockPush());
       await expect(
         svc.updatePreferences("user-1", { wake_hour: 24 })
+      ).rejects.toThrow(ValidationError);
+      await expect(
+        svc.updatePreferences("user-1", { wake_hour: 24 })
       ).rejects.toThrow(/wake_hour/i);
+    });
+
+    it("rejects sleep_hour > 23", async () => {
+      const svc = new NotifyService(mockNotifyDB(), mockPush());
+      await expect(
+        svc.updatePreferences("user-1", { sleep_hour: 24 })
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it("rejects wake_hour < 0", async () => {
+      const svc = new NotifyService(mockNotifyDB(), mockPush());
+      await expect(
+        svc.updatePreferences("user-1", { wake_hour: -1 })
+      ).rejects.toThrow(ValidationError);
     });
 
     it("updates preferences", async () => {
@@ -150,6 +216,16 @@ describe("NotifyService", () => {
       expect(result.wake_hour).toBe(9);
       expect(upsert).toHaveBeenCalled();
     });
+
+    it("throws ServiceError when DB upsert fails", async () => {
+      const db = mockNotifyDB({
+        upsertNotificationPreferences: vi.fn().mockRejectedValue(new Error("db down")),
+      });
+      const svc = new NotifyService(db, mockPush());
+      await expect(
+        svc.updatePreferences("user-1", { push_enabled: false })
+      ).rejects.toThrow(ServiceError);
+    });
   });
 
   describe("trackOpened", () => {
@@ -160,11 +236,19 @@ describe("NotifyService", () => {
       expect(db.trackNotificationOpened).toHaveBeenCalledWith("user-1", "notif-123");
     });
 
+    it("uses empty string when notificationId is undefined", async () => {
+      const db = mockNotifyDB();
+      const svc = new NotifyService(db, mockPush());
+      await svc.trackOpened("user-1");
+      expect(db.trackNotificationOpened).toHaveBeenCalledWith("user-1", "");
+    });
+
     it("does not throw when DB fails", async () => {
       const db = mockNotifyDB({
         trackNotificationOpened: vi.fn().mockRejectedValue(new Error("db down")),
       });
       const svc = new NotifyService(db, mockPush());
+      // trackOpened uses .catch(() => {}), so it should not throw
       await expect(svc.trackOpened("user-1", "notif-123")).resolves.toBeUndefined();
     });
   });

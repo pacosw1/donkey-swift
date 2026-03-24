@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { ReceiptService, type ReceiptDB, type ReceiptConfig } from "../receipt/index.js";
-import { ValidationError } from "../errors/index.js";
+import { ValidationError, ServiceError } from "../errors/index.js";
 
 function mockDB(overrides: Partial<ReceiptDB> = {}): ReceiptDB {
   return {
@@ -13,24 +13,37 @@ function mockDB(overrides: Partial<ReceiptDB> = {}): ReceiptDB {
 
 describe("ReceiptService", () => {
   describe("verifyReceipt", () => {
-    it("rejects missing transaction", async () => {
+    it("rejects missing userId", async () => {
       const svc = new ReceiptService(mockDB(), {});
-      await expect(svc.verifyReceipt("user-1", ""))
-        .rejects.toThrow(ValidationError);
+      await expect(svc.verifyReceipt("", "fake.jws.token")).rejects.toThrow(ValidationError);
+      await expect(svc.verifyReceipt("", "fake.jws.token")).rejects.toThrow(/unauthorized/);
     });
 
-    it("rejects unauthorized (no userId)", async () => {
+    it("rejects missing transaction", async () => {
       const svc = new ReceiptService(mockDB(), {});
-      await expect(svc.verifyReceipt("", "fake.jws.token"))
-        .rejects.toThrow(ValidationError);
+      await expect(svc.verifyReceipt("user-1", "")).rejects.toThrow(ValidationError);
+      await expect(svc.verifyReceipt("user-1", "")).rejects.toThrow(/transaction is required/);
+    });
+
+    it("rejects invalid JWS (verification fails)", async () => {
+      const svc = new ReceiptService(mockDB(), {});
+      // A non-valid JWS string will fail during verification
+      await expect(svc.verifyReceipt("user-1", "not.a.real.jws")).rejects.toThrow(ValidationError);
+      await expect(svc.verifyReceipt("user-1", "not.a.real.jws")).rejects.toThrow(/verification failed/);
     });
   });
 
   describe("processWebhook", () => {
     it("rejects missing signedPayload", async () => {
       const svc = new ReceiptService(mockDB(), {});
-      await expect(svc.processWebhook(""))
-        .rejects.toThrow(ValidationError);
+      await expect(svc.processWebhook("")).rejects.toThrow(ValidationError);
+      await expect(svc.processWebhook("")).rejects.toThrow(/invalid webhook payload/);
+    });
+
+    it("rejects invalid JWS signature", async () => {
+      const svc = new ReceiptService(mockDB(), {});
+      await expect(svc.processWebhook("fake.jws.token")).rejects.toThrow(ValidationError);
+      await expect(svc.processWebhook("fake.jws.token")).rejects.toThrow(/invalid signature/);
     });
 
     it("handles TEST notification type", async () => {
@@ -48,10 +61,21 @@ describe("ReceiptService", () => {
       // DB should not be called for TEST notifications
       expect(db.upsertSubscription).not.toHaveBeenCalled();
     });
+
+    it("rejects missing signed transaction info", async () => {
+      const svc = new ReceiptService(mockDB(), {});
+
+      vi.spyOn(svc as any, "verifyAndDecodePayload").mockResolvedValue(
+        JSON.stringify({ notificationType: "DID_RENEW", data: {} })
+      );
+
+      await expect(svc.processWebhook("fake.jws.token")).rejects.toThrow(ValidationError);
+      await expect(svc.processWebhook("fake.jws.token")).rejects.toThrow(/missing signed transaction/);
+    });
   });
 
   describe("notificationToStatus", () => {
-    // Access the private method via prototype for status mapping tests
+    // Access the private method via (svc as any) for status mapping tests
     function callNotificationToStatus(
       notifType: string,
       subtype: string,
