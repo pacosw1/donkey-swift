@@ -181,7 +181,7 @@ export class SyncService {
             const data = { action: "sync" };
             let sent = 0;
             for (const d of devices) {
-                if (d.deviceId === excludeDeviceId) {
+                if (excludeDeviceId && d.deviceId && d.deviceId === excludeDeviceId) {
                     console.log(`[sync] skip device ${d.deviceId} (requester)`);
                     continue;
                 }
