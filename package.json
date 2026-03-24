@@ -14,6 +14,7 @@
   ],
   "exports": {
     "./errors": "./dist/errors/index.js",
+    "./middleware": "./dist/middleware/index.js",
     "./migrate": "./dist/migrate/index.js",
     "./health": "./dist/health/index.js",
     "./logbuf": "./dist/logbuf/index.js",
@@ -38,6 +39,7 @@
   "typesVersions": {
     "*": {
       "errors": ["dist/errors/index.d.ts"],
+      "middleware": ["dist/middleware/index.d.ts"],
       "migrate": ["dist/migrate/index.d.ts"],
       "health": ["dist/health/index.d.ts"],
       "logbuf": ["dist/logbuf/index.d.ts"],
