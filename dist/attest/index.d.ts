@@ -3,8 +3,6 @@ export interface AttestDB {
     storeAttestKey(userId: string, keyId: string): Promise<void>;
     getAttestKey(userId: string): Promise<string>;
 }
-export interface AttestConfig {
-}
 export declare class AttestService {
     private db;
     constructor(db: AttestDB);

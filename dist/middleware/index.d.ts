@@ -2,6 +2,8 @@ import type { MiddlewareHandler } from "hono";
 export interface AuthConfig {
     /** Validates a session token and returns the user ID. */
     parseToken: (token: string) => Promise<string>;
+    /** Cookie name for session token (default: "session"). */
+    cookieName?: string;
 }
 /**
  * Middleware that extracts user ID from Bearer token or session cookie.
@@ -13,6 +15,10 @@ export interface AdminConfig {
     adminEmail?: string;
     parseToken?: (token: string) => Promise<string>;
     getUserEmail?: (userId: string) => Promise<string>;
+    /** Cookie name for admin session (default: "admin_session"). */
+    adminCookieName?: string;
+    /** Cookie name for admin key (default: "admin_key"). */
+    adminKeyCookieName?: string;
 }
 /** Middleware that checks admin API key or admin email JWT. */
 export declare function requireAdmin(cfg: AdminConfig): MiddlewareHandler;

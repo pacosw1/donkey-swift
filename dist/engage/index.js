@@ -7,8 +7,8 @@ export function defaultPaywallTrigger(data) {
     return "";
 }
 // ── Service ─────────────────────────────────────────────────────────────────
-const VALID_STATUSES = new Set(["active", "expired", "cancelled", "trial", "free"]);
-const VALID_FEEDBACK_TYPES = new Set(["positive", "negative", "bug", "feature", "general"]);
+export const VALID_STATUSES = new Set(["active", "expired", "cancelled", "trial", "free"]);
+export const VALID_FEEDBACK_TYPES = new Set(["positive", "negative", "bug", "feature", "general"]);
 export class EngageService {
     cfg;
     db;

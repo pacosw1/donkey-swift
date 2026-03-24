@@ -4,7 +4,7 @@ export interface Migration {
   sql: string;
 }
 
-/** Interface for any SQL executor (Drizzle, pg Pool, etc.). */
+/** Interface for any SQL executor. */
 export interface SqlExecutor {
   execute(sql: string): Promise<void>;
 }

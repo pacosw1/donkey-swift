@@ -1,4 +1,4 @@
-class Hub {
+export class Hub {
     connections = new Map();
     key(role, userId) {
         return `${role}:${userId}`;
@@ -190,7 +190,7 @@ export class ChatService {
         const tokens = await this.db.enabledDeviceTokens(userId).catch(() => []);
         if (!tokens.length)
             return;
-        const title = "New message from Developer";
+        const title = `New message from ${this.cfg.adminDisplayName ?? "Support"}`;
         const body = message.length > 100 ? message.slice(0, 97) + "..." : message;
         const data = { type: "chat_message", user_id: userId };
         for (const token of tokens) {

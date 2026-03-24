@@ -95,7 +95,7 @@ export declare class NotifyService {
 export type TickFunc = (userId: string, prefs: NotificationPreferences, tokens: DeviceToken[], push: PushProvider) => Promise<void>;
 export interface NotifySchedulerConfig {
     intervalMs?: number;
-    tickFunc?: TickFunc;
+    tickFunc: TickFunc;
     extraTick?: () => Promise<void>;
 }
 export declare class NotifyScheduler {
@@ -111,4 +111,5 @@ export declare class NotifyScheduler {
     private evaluate;
     private maybeNotify;
 }
+export declare function defaultTick(userId: string, _prefs: NotificationPreferences, tokens: DeviceToken[], push: PushProvider): Promise<void>;
 //# sourceMappingURL=index.d.ts.map

@@ -18,6 +18,8 @@ export interface AuthConfig {
     /** Session expiry in seconds (default: 7 days). */
     sessionExpirySec?: number;
     productionEnv?: boolean;
+    /** Cookie name for session token (default: "session"). */
+    cookieName?: string;
 }
 export declare class AuthService {
     private cfg;

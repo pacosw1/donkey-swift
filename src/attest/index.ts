@@ -8,8 +8,6 @@ export interface AttestDB {
   getAttestKey(userId: string): Promise<string>;
 }
 
-export interface AttestConfig {}
-
 // ── Service ─────────────────────────────────────────────────────────────────
 
 export class AttestService {

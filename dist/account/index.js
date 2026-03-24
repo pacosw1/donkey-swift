@@ -4,15 +4,11 @@ export class AccountService {
     db;
     appCleanup;
     appExport;
-    constructor(cfg, db, ...opts) {
+    constructor(cfg, db, opts) {
         this.cfg = cfg;
         this.db = db;
-        for (const opt of opts) {
-            if (opt && typeof opt.deleteAppData === "function")
-                this.appCleanup = opt;
-            if (opt && typeof opt.exportAppData === "function")
-                this.appExport = opt;
-        }
+        this.appCleanup = opts?.cleanup;
+        this.appExport = opts?.exporter;
     }
     /** DELETE /api/v1/account */
     handleDeleteAccount = async (c) => {

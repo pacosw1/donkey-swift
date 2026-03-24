@@ -55,8 +55,8 @@ export function defaultPaywallTrigger(data: EngagementData): string {
 
 // ── Service ─────────────────────────────────────────────────────────────────
 
-const VALID_STATUSES = new Set(["active", "expired", "cancelled", "trial", "free"]);
-const VALID_FEEDBACK_TYPES = new Set(["positive", "negative", "bug", "feature", "general"]);
+export const VALID_STATUSES = new Set(["active", "expired", "cancelled", "trial", "free"]);
+export const VALID_FEEDBACK_TYPES = new Set(["positive", "negative", "bug", "feature", "general"]);
 
 export class EngageService {
   private paywallTrigger: (data: EngagementData) => string;

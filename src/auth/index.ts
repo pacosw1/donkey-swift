@@ -31,6 +31,8 @@ export interface AuthConfig {
   /** Session expiry in seconds (default: 7 days). */
   sessionExpirySec?: number;
   productionEnv?: boolean;
+  /** Cookie name for session token (default: "session"). */
+  cookieName?: string;
 }
 
 // ── Service ─────────────────────────────────────────────────────────────────
@@ -145,7 +147,7 @@ export class AuthService {
 
     const sessionToken = await this.createSessionToken(user.id);
 
-    setCookie(c, "session", sessionToken, {
+    setCookie(c, this.cfg.cookieName ?? "session", sessionToken, {
       path: "/",
       httpOnly: true,
       secure: this.cfg.productionEnv ?? false,
@@ -169,7 +171,7 @@ export class AuthService {
 
   /** POST /api/v1/auth/logout */
   handleLogout = async (c: Context) => {
-    deleteCookie(c, "session", { path: "/" });
+    deleteCookie(c, this.cfg.cookieName ?? "session", { path: "/" });
     return c.json({ status: "logged out" });
   };
 }

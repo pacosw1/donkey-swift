@@ -1,4 +1,5 @@
-import type { Context, MiddlewareHandler } from "hono";
+import type { MiddlewareHandler } from "hono";
+import { getCookie } from "hono/cookie";
 import { getClientIp } from "../httputil/index.js";
 
 // ── Auth Middleware ──────────────────────────────────────────────────────────
@@ -6,6 +7,8 @@ import { getClientIp } from "../httputil/index.js";
 export interface AuthConfig {
   /** Validates a session token and returns the user ID. */
   parseToken: (token: string) => Promise<string>;
+  /** Cookie name for session token (default: "session"). */
+  cookieName?: string;
 }
 
 /**
@@ -24,7 +27,7 @@ export function requireAuth(cfg: AuthConfig): MiddlewareHandler {
 
     // 2. Fallback to cookie
     if (!token) {
-      const cookie = getCookie(c, "session");
+      const cookie = getCookie(c, cfg.cookieName ?? "session");
       if (cookie) token = cookie;
     }
 
@@ -49,6 +52,10 @@ export interface AdminConfig {
   adminEmail?: string;
   parseToken?: (token: string) => Promise<string>;
   getUserEmail?: (userId: string) => Promise<string>;
+  /** Cookie name for admin session (default: "admin_session"). */
+  adminCookieName?: string;
+  /** Cookie name for admin key (default: "admin_key"). */
+  adminKeyCookieName?: string;
 }
 
 /** Middleware that checks admin API key or admin email JWT. */
@@ -62,7 +69,7 @@ export function requireAdmin(cfg: AdminConfig): MiddlewareHandler {
         c.req.header("x-admin-key"),
         c.req.query("key"),
         c.req.query("admin_key"),
-        getCookie(c, "admin_key"),
+        getCookie(c, cfg.adminKeyCookieName ?? "admin_key"),
       ];
       if (sources.some((s) => s === cfg.adminKey)) {
         authenticated = true;
@@ -71,7 +78,7 @@ export function requireAdmin(cfg: AdminConfig): MiddlewareHandler {
 
     // Check admin session cookie
     if (!authenticated && cfg.parseToken && cfg.getUserEmail) {
-      const cookie = getCookie(c, "admin_session");
+      const cookie = getCookie(c, cfg.adminCookieName ?? "admin_session");
       if (cookie) {
         try {
           const userId = await cfg.parseToken(cookie);
@@ -215,11 +222,4 @@ export function version(current: string, minimum: string): MiddlewareHandler {
   };
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
 
-function getCookie(c: Context, name: string): string | undefined {
-  const cookieHeader = c.req.header("cookie");
-  if (!cookieHeader) return undefined;
-  const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
-  return match?.[1];
-}

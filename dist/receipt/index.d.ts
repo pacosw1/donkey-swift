@@ -43,6 +43,7 @@ export interface VerifyResponse {
 export interface ReceiptConfig {
     bundleId?: string;
     environment?: string;
+    priceToCents?: (priceMilliunits: number, currency: string) => number;
 }
 export declare class ReceiptService {
     private db;

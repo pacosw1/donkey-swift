@@ -44,12 +44,10 @@ export class AccountService {
   constructor(
     private cfg: AccountConfig,
     private db: AccountDB,
-    ...opts: unknown[]
+    opts?: { cleanup?: AppCleanup; exporter?: AppExporter }
   ) {
-    for (const opt of opts) {
-      if (opt && typeof (opt as AppCleanup).deleteAppData === "function") this.appCleanup = opt as AppCleanup;
-      if (opt && typeof (opt as AppExporter).exportAppData === "function") this.appExport = opt as AppExporter;
-    }
+    this.appCleanup = opts?.cleanup;
+    this.appExport = opts?.exporter;
   }
 
   /** DELETE /api/v1/account */

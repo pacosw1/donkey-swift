@@ -118,7 +118,7 @@ export class NotifyScheduler {
         this.db = db;
         this.push = push;
         this.intervalMs = cfg.intervalMs ?? 15 * 60 * 1000;
-        this.tickFn = cfg.tickFunc ?? defaultTick;
+        this.tickFn = cfg.tickFunc;
         this.extraTick = cfg.extraTick;
     }
     start() {
@@ -156,9 +156,9 @@ export class NotifyScheduler {
         const prefs = await this.db.getNotificationPreferences(userId).catch(() => null);
         if (!prefs?.push_enabled)
             return;
-        // Check waking hours using UTC offset approximation
+        // Check waking hours using user's timezone
         const now = new Date();
-        const currentHour = now.getUTCHours(); // Simplified; full tz support needs Intl
+        const currentHour = parseInt(new Intl.DateTimeFormat("en", { hour: "numeric", hour12: false, timeZone: prefs.timezone }).format(now), 10);
         if (currentHour < prefs.wake_hour || currentHour >= prefs.sleep_hour)
             return;
         // Check interval since last notification
@@ -174,7 +174,7 @@ export class NotifyScheduler {
         await this.tickFn(userId, prefs, tokens, this.push);
     }
 }
-async function defaultTick(userId, _prefs, tokens, push) {
+export async function defaultTick(userId, _prefs, tokens, push) {
     for (const token of tokens) {
         try {
             await push.send(token.token, "Hey!", "Don't forget to check in today.");

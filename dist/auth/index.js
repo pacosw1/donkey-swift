@@ -86,7 +86,7 @@ export class AuthService {
             return c.json({ error: "failed to create user" }, 500);
         }
         const sessionToken = await this.createSessionToken(user.id);
-        setCookie(c, "session", sessionToken, {
+        setCookie(c, this.cfg.cookieName ?? "session", sessionToken, {
             path: "/",
             httpOnly: true,
             secure: this.cfg.productionEnv ?? false,
@@ -108,7 +108,7 @@ export class AuthService {
     };
     /** POST /api/v1/auth/logout */
     handleLogout = async (c) => {
-        deleteCookie(c, "session", { path: "/" });
+        deleteCookie(c, this.cfg.cookieName ?? "session", { path: "/" });
         return c.json({ status: "logged out" });
     };
 }

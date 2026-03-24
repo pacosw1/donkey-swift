@@ -37,6 +37,8 @@ export interface EngageConfig {
     paywallTrigger?: (data: EngagementData) => string;
 }
 export declare function defaultPaywallTrigger(data: EngagementData): string;
+export declare const VALID_STATUSES: Set<string>;
+export declare const VALID_FEEDBACK_TYPES: Set<string>;
 export declare class EngageService {
     private cfg;
     private db;

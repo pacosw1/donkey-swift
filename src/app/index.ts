@@ -28,6 +28,10 @@ export interface AppConfig {
   minimumVersion: string;
   /** Allowed CORS origins ("*" for all) */
   corsOrigins?: string;
+  /** API route prefix (default: "/api/v1") */
+  apiPrefix?: string;
+  /** Admin route prefix (default: "/admin/api") */
+  adminPrefix?: string;
 
   // Auth
   authConfig: AuthConfig;
@@ -55,6 +59,9 @@ export interface AppConfig {
 export function createApp(cfg: AppConfig): Hono {
   const app = new Hono();
 
+  const api = cfg.apiPrefix ?? "/api/v1";
+  const adm = cfg.adminPrefix ?? "/admin/api";
+
   // Global middleware
   app.use("*", cors(cfg.corsOrigins ?? "*"));
   app.use("*", version(cfg.apiVersion, cfg.minimumVersion));
@@ -72,108 +79,108 @@ export function createApp(cfg: AppConfig): Hono {
 
   // ── Auth ──
   const authRl = new RateLimiter(10, 60_000);
-  app.post("/api/v1/auth/apple", rateLimit(authRl), cfg.auth.handleAppleAuth);
-  app.get("/api/v1/auth/me", auth, cfg.auth.handleMe);
-  app.post("/api/v1/auth/logout", cfg.auth.handleLogout);
+  app.post(`${api}/auth/apple`, rateLimit(authRl), cfg.auth.handleAppleAuth);
+  app.get(`${api}/auth/me`, auth, cfg.auth.handleMe);
+  app.post(`${api}/auth/logout`, cfg.auth.handleLogout);
 
   // ── Engage ──
   if (cfg.engage) {
     const e = cfg.engage;
-    app.post("/api/v1/events", auth, e.handleTrackEvents);
-    app.put("/api/v1/subscription", auth, e.handleUpdateSubscription);
-    app.post("/api/v1/sessions", auth, e.handleSessionReport);
-    app.get("/api/v1/user/eligibility", auth, e.handleGetEligibility);
-    app.post("/api/v1/feedback", auth, e.handleSubmitFeedback);
+    app.post(`${api}/events`, auth, e.handleTrackEvents);
+    app.put(`${api}/subscription`, auth, e.handleUpdateSubscription);
+    app.post(`${api}/sessions`, auth, e.handleSessionReport);
+    app.get(`${api}/user/eligibility`, auth, e.handleGetEligibility);
+    app.post(`${api}/feedback`, auth, e.handleSubmitFeedback);
   }
 
   // ── Notifications ──
   if (cfg.notify) {
     const n = cfg.notify;
-    app.post("/api/v1/notifications/devices", auth, n.handleRegisterDevice);
-    app.delete("/api/v1/notifications/devices", auth, n.handleDisableDevice);
-    app.get("/api/v1/notifications/preferences", auth, n.handleGetPrefs);
-    app.put("/api/v1/notifications/preferences", auth, n.handleUpdatePrefs);
-    app.post("/api/v1/notifications/opened", auth, n.handleNotificationOpened);
+    app.post(`${api}/notifications/devices`, auth, n.handleRegisterDevice);
+    app.delete(`${api}/notifications/devices`, auth, n.handleDisableDevice);
+    app.get(`${api}/notifications/preferences`, auth, n.handleGetPrefs);
+    app.put(`${api}/notifications/preferences`, auth, n.handleUpdatePrefs);
+    app.post(`${api}/notifications/opened`, auth, n.handleNotificationOpened);
   }
 
   // ── Chat ──
   if (cfg.chat) {
     const ch = cfg.chat;
-    app.get("/api/v1/chat", auth, ch.handleGetChat);
-    app.post("/api/v1/chat", auth, ch.handleSendChat);
-    app.get("/api/v1/chat/unread", auth, ch.handleUnreadCount);
+    app.get(`${api}/chat`, auth, ch.handleGetChat);
+    app.post(`${api}/chat`, auth, ch.handleSendChat);
+    app.get(`${api}/chat/unread`, auth, ch.handleUnreadCount);
     // Admin chat
-    app.get("/admin/api/chat", admin, ch.handleAdminListChats);
-    app.get("/admin/api/chat/:user_id", admin, ch.handleAdminGetChat);
-    app.post("/admin/api/chat/:user_id", admin, ch.handleAdminReplyChat);
+    app.get(`${adm}/chat`, admin, ch.handleAdminListChats);
+    app.get(`${adm}/chat/:user_id`, admin, ch.handleAdminGetChat);
+    app.post(`${adm}/chat/:user_id`, admin, ch.handleAdminReplyChat);
   }
 
   // ── Sync ──
   if (cfg.sync) {
     const s = cfg.sync;
-    app.get("/api/v1/sync/changes", auth, s.handleSyncChanges);
-    app.post("/api/v1/sync/batch", auth, s.handleSyncBatch);
-    app.delete("/api/v1/sync/:entity_type/:id", auth, s.handleSyncDelete);
+    app.get(`${api}/sync/changes`, auth, s.handleSyncChanges);
+    app.post(`${api}/sync/batch`, auth, s.handleSyncBatch);
+    app.delete(`${api}/sync/:entity_type/:id`, auth, s.handleSyncDelete);
   }
 
   // ── Flags ──
   if (cfg.flags) {
     const f = cfg.flags;
-    app.get("/api/v1/flags/:key", auth, f.handleCheck);
-    app.post("/api/v1/flags/check", auth, f.handleBatchCheck);
-    app.get("/admin/api/flags", admin, f.handleAdminList);
-    app.post("/admin/api/flags", admin, f.handleAdminCreate);
-    app.put("/admin/api/flags/:key", admin, f.handleAdminUpdate);
-    app.delete("/admin/api/flags/:key", admin, f.handleAdminDelete);
+    app.get(`${api}/flags/:key`, auth, f.handleCheck);
+    app.post(`${api}/flags/check`, auth, f.handleBatchCheck);
+    app.get(`${adm}/flags`, admin, f.handleAdminList);
+    app.post(`${adm}/flags`, admin, f.handleAdminCreate);
+    app.put(`${adm}/flags/:key`, admin, f.handleAdminUpdate);
+    app.delete(`${adm}/flags/:key`, admin, f.handleAdminDelete);
   }
 
   // ── Receipts ──
   if (cfg.receipt) {
     const r = cfg.receipt;
-    app.post("/api/v1/receipt/verify", auth, r.handleVerifyReceipt);
-    app.post("/api/v1/receipt/webhook", r.handleWebhook); // No auth — Apple calls directly
+    app.post(`${api}/receipt/verify`, auth, r.handleVerifyReceipt);
+    app.post(`${api}/receipt/webhook`, r.handleWebhook); // No auth — Apple calls directly
   }
 
   // ── Lifecycle ──
   if (cfg.lifecycle) {
     const l = cfg.lifecycle;
-    app.get("/api/v1/user/lifecycle", auth, l.handleGetLifecycle);
-    app.post("/api/v1/user/lifecycle/ack", auth, l.handleAckPrompt);
+    app.get(`${api}/user/lifecycle`, auth, l.handleGetLifecycle);
+    app.post(`${api}/user/lifecycle/ack`, auth, l.handleAckPrompt);
   }
 
   // ── Account ──
   if (cfg.account) {
     const a = cfg.account;
-    app.delete("/api/v1/account", auth, a.handleDeleteAccount);
-    app.post("/api/v1/account/anonymize", auth, a.handleAnonymizeAccount);
-    app.get("/api/v1/account/export", auth, a.handleExportData);
+    app.delete(`${api}/account`, auth, a.handleDeleteAccount);
+    app.post(`${api}/account/anonymize`, auth, a.handleAnonymizeAccount);
+    app.get(`${api}/account/export`, auth, a.handleExportData);
   }
 
   // ── Attest ──
   if (cfg.attest) {
     const at = cfg.attest;
-    app.post("/api/v1/attest/challenge", auth, at.handleChallenge);
-    app.post("/api/v1/attest/verify", auth, at.handleVerify);
+    app.post(`${api}/attest/challenge`, auth, at.handleChallenge);
+    app.post(`${api}/attest/verify`, auth, at.handleVerify);
   }
 
   // ── Paywall ──
   if (cfg.paywallStore) {
-    app.get("/api/v1/paywall/config", handleGetConfig(cfg.paywallStore));
-    app.put("/admin/api/paywall/config", admin, handleUpdateConfig(cfg.paywallStore));
+    app.get(`${api}/paywall/config`, handleGetConfig(cfg.paywallStore));
+    app.put(`${adm}/paywall/config`, admin, handleUpdateConfig(cfg.paywallStore));
   }
 
   // ── Analytics ──
   if (cfg.analytics) {
     const an = cfg.analytics;
-    app.get("/admin/api/analytics/dau", admin, an.handleDAU);
-    app.get("/admin/api/analytics/events", admin, an.handleEvents);
-    app.get("/admin/api/analytics/mrr", admin, an.handleMRR);
-    app.get("/admin/api/analytics/summary", admin, an.handleSummary);
+    app.get(`${adm}/analytics/dau`, admin, an.handleDAU);
+    app.get(`${adm}/analytics/events`, admin, an.handleEvents);
+    app.get(`${adm}/analytics/mrr`, admin, an.handleMRR);
+    app.get(`${adm}/analytics/summary`, admin, an.handleSummary);
   }
 
   // ── Logs ──
   if (cfg.logBuffer) {
-    app.get("/admin/api/logs", admin, handleAdminLogs(cfg.logBuffer));
+    app.get(`${adm}/logs`, admin, handleAdminLogs(cfg.logBuffer));
   }
 
   return app;

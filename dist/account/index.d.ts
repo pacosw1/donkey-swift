@@ -32,7 +32,10 @@ export declare class AccountService {
     private db;
     private appCleanup?;
     private appExport?;
-    constructor(cfg: AccountConfig, db: AccountDB, ...opts: unknown[]);
+    constructor(cfg: AccountConfig, db: AccountDB, opts?: {
+        cleanup?: AppCleanup;
+        exporter?: AppExporter;
+    });
     /** DELETE /api/v1/account */
     handleDeleteAccount: (c: Context) => Promise<(Response & import("hono").TypedResponse<{
         error: string;

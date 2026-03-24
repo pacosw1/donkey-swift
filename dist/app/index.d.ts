@@ -21,6 +21,10 @@ export interface AppConfig {
     minimumVersion: string;
     /** Allowed CORS origins ("*" for all) */
     corsOrigins?: string;
+    /** API route prefix (default: "/api/v1") */
+    apiPrefix?: string;
+    /** Admin route prefix (default: "/admin/api") */
+    adminPrefix?: string;
     authConfig: AuthConfig;
     adminConfig: AdminConfig;
     auth: AuthService;

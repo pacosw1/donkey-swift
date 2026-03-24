@@ -45,8 +45,10 @@ export class ReceiptService {
             return c.json({ error: validationErr }, 400);
         const status = this.transactionToStatus(txn);
         const expiresAt = txn.expiresDate ? new Date(txn.expiresDate) : null;
-        const priceCents = Math.floor(txn.price / 10);
         const currency = txn.currency || "USD";
+        const priceCents = this.cfg.priceToCents
+            ? this.cfg.priceToCents(txn.price, currency)
+            : Math.floor(txn.price / 10);
         try {
             await this.db.upsertSubscription(userId, txn.productId, txn.originalTransactionId, status, expiresAt, priceCents, currency);
         }
@@ -114,8 +116,10 @@ export class ReceiptService {
         }
         const status = this.notificationToStatus(notification.notificationType, notification.subtype, txn);
         const expiresAt = txn.expiresDate ? new Date(txn.expiresDate) : null;
-        const priceCents = Math.floor(txn.price / 10);
         const currency = txn.currency || "USD";
+        const priceCents = this.cfg.priceToCents
+            ? this.cfg.priceToCents(txn.price, currency)
+            : Math.floor(txn.price / 10);
         await this.db.upsertSubscription(userId, txn.productId, txn.originalTransactionId, status, expiresAt, priceCents, currency)
             .catch((err) => console.log(`[receipt] webhook subscription update failed: ${err}`));
         await this.db.storeTransaction({

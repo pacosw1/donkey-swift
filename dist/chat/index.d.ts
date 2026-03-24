@@ -30,6 +30,7 @@ export interface ChatThread {
 export interface ChatConfig {
     parseToken: (token: string) => Promise<string>;
     adminAuth?: (req: Request) => boolean;
+    adminDisplayName?: string;
 }
 export interface WSEvent {
     type: string;
@@ -40,7 +41,7 @@ interface WSConn {
     userId: string;
     role: string;
 }
-declare class Hub {
+export declare class Hub {
     private connections;
     private key;
     register(conn: WSConn): void;

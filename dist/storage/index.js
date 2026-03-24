@@ -5,6 +5,9 @@ export class StorageClient {
     _configured;
     constructor(cfg) {
         this._configured = !!(cfg.bucket && cfg.accessKeyId);
+        if (cfg.accessKeyId && !cfg.secretAccessKey) {
+            throw new Error("storage: secretAccessKey is required when accessKeyId is provided");
+        }
         this.bucket = cfg.bucket;
         this.client = new S3Client({
             region: cfg.region ?? "us-east-1",
