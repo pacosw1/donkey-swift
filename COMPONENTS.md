@@ -1,46 +1,42 @@
 # Donkey-Swift — Package API Catalog
 
-Shared TypeScript packages for iOS app backends. Interface-based DB, Hono handlers, zero database dependency.
+Framework-agnostic TypeScript services for iOS app backends. Pure business logic — no HTTP framework dependency.
 
-## httputil
+## errors
 
-JSON request/response helpers for raw `Request`/`Response` objects.
+Typed errors thrown by services. Map to HTTP status codes in your route handlers.
+
+### Classes
+
+```typescript
+class ServiceError extends Error { code: string }
+class ValidationError extends ServiceError {}    // 400
+class UnauthorizedError extends ServiceError {}  // 401
+class ForbiddenError extends ServiceError {}     // 403
+class NotFoundError extends ServiceError {}      // 404
+class ConflictError extends ServiceError {}      // 409
+class RateLimitError extends ServiceError {}     // 429
+class NotConfiguredError extends ServiceError {} // 501
+```
 
 ### Functions
 
 ```typescript
-function jsonResponse(status: number, data: unknown): Response
-function errorResponse(status: number, message: string): Response
-async function decodeJson<T>(request: Request): Promise<T>
-function getClientIp(request: Request): string
+function errorToStatus(err: ServiceError): number
 ```
 
 ---
 
 ## middleware
 
-Hono middleware for auth, admin, CORS, rate limiting, logging, and versioning.
+Framework-agnostic utilities for rate limiting, token extraction, and request ID generation. No HTTP framework dependency.
 
-### Types
+### Classes
 
 ```typescript
-interface AuthConfig {
-  parseToken: (token: string) => Promise<string>;
-  cookieName?: string;        // default: "session"
-}
-
-interface AdminConfig {
-  adminKey?: string;
-  adminEmail?: string;
-  parseToken?: (token: string) => Promise<string>;
-  getUserEmail?: (userId: string) => Promise<string>;
-  adminCookieName?: string;   // default: "admin_session"
-  adminKeyCookieName?: string; // default: "admin_key"
-}
-
 class RateLimiter {
   constructor(rate: number, windowMs: number)
-  allow(ip: string): boolean
+  allow(key: string): boolean
   destroy(): void
 }
 ```
@@ -48,13 +44,14 @@ class RateLimiter {
 ### Functions
 
 ```typescript
-function requireAuth(cfg: AuthConfig): MiddlewareHandler
-function requireAdmin(cfg: AdminConfig): MiddlewareHandler
-function cors(allowedOrigins: string): MiddlewareHandler
-function rateLimit(rl: RateLimiter): MiddlewareHandler
-function requestId(): MiddlewareHandler
-function requestLog(...skipPaths: string[]): MiddlewareHandler
-function version(current: string, minimum: string): MiddlewareHandler
+/** Extract Bearer token from Authorization header value. */
+function extractBearerToken(authorizationHeader?: string): string | undefined
+
+/** Constant-time string comparison for secrets/API keys. */
+function safeEqual(a: string, b: string): boolean
+
+/** Generate or pass through a request ID (UUID). */
+function resolveRequestId(existing?: string): string
 ```
 
 ---
@@ -110,8 +107,8 @@ interface HealthConfig {
 ```typescript
 class HealthService {
   constructor(cfg: HealthConfig)
-  handleHealth: (c: Context) => Promise<Response>   // GET /health
-  handleReady: (c: Context) => Promise<Response>     // GET /ready
+  health(): { status: string }
+  async ready(): Promise<{ status: string; checks: Record<string, string> }>
 }
 ```
 
@@ -137,6 +134,7 @@ class LogBuffer {
   constructor(capacity: number)
   write(text: string): void
   getLines(n?: number): string[]
+  queryLogs(opts?: { limit?: number; filter?: string }): { lines: string[]; count: number }
 }
 ```
 
@@ -144,7 +142,6 @@ class LogBuffer {
 
 ```typescript
 function setupLogCapture(buf: LogBuffer): () => void
-function handleAdminLogs(buf: LogBuffer): (c: Context) => Promise<Response>
 ```
 
 ---
@@ -236,7 +233,6 @@ interface AuthConfig {
   appleWebClientId?: string;
   sessionExpirySec?: number;       // default: 7 days
   productionEnv?: boolean;
-  cookieName?: string;             // default: "session"
   sessionDB?: SessionDB;           // optional server-side session store
   appleClientSecret?: string;      // JWT for Sign in with Apple web flow
   appleRedirectUri?: string;       // redirect URI for Apple web flow
@@ -251,13 +247,13 @@ class AuthService {
   async verifyAppleIdToken(tokenString: string): Promise<{ sub: string; email: string; emailVerified: boolean }>
   async createSessionToken(userId: string): Promise<string>
   async parseSessionToken(tokenStr: string): Promise<string>
-  handleAppleAuth: (c: Context) => Promise<Response>       // POST   /api/v1/auth/apple
-  handleWebAuth: (c: Context) => Promise<Response>         // POST   /api/v1/auth/apple/web
-  handleMe: (c: Context) => Promise<Response>              // GET    /api/v1/auth/me
-  handleLogout: (c: Context) => Promise<Response>          // POST   /api/v1/auth/logout
-  handleLogoutAll: (c: Context) => Promise<Response>       // POST   /api/v1/auth/logout-all
-  handleListSessions: (c: Context) => Promise<Response>    // GET    /api/v1/auth/sessions
-  handleRevokeSession: (c: Context) => Promise<Response>   // DELETE /api/v1/auth/sessions/:jti
+  async authenticateWithApple(identityToken: string, name?: string): Promise<{ token: string; user: User }>
+  async authenticateWithWeb(code: string, name?: string): Promise<{ token: string; user: User }>
+  async getUser(userId: string): Promise<User>
+  async logout(sessionToken?: string): Promise<void>
+  async logoutAll(userId: string): Promise<void>
+  async listSessions(userId: string): Promise<Array<{ jti: string; createdAt: Date | string }>>
+  async revokeSession(jti: string): Promise<void>
 }
 ```
 
@@ -324,19 +320,19 @@ interface EngageConfig {
 class EngageService {
   constructor(cfg: EngageConfig, db: EngageDB)
   registerEventHook(hook: EventHook): void
-  handleTrackEvents: (c: Context) => Promise<Response>         // POST /api/v1/events
-  handleUpdateSubscription: (c: Context) => Promise<Response>  // PUT  /api/v1/subscription
-  handleSessionReport: (c: Context) => Promise<Response>       // POST /api/v1/sessions
-  handleGetEligibility: (c: Context) => Promise<Response>      // GET  /api/v1/user/eligibility
-  handleSubmitFeedback: (c: Context) => Promise<Response>      // POST /api/v1/feedback
+  async trackEvents(userId: string, events: Array<{ event: string; metadata?: unknown; timestamp?: string }>): Promise<{ tracked: number }>
+  async updateSubscription(userId: string, input: { product_id?: string; status?: string; expires_at?: string; original_transaction_id?: string; price_cents?: number; currency_code?: string }): Promise<UserSubscription | { status: string }>
+  async reportSession(userId: string, input: { session_id: string; action: "start" | "end"; app_version?: string; os_version?: string; country?: string; duration_s?: number }): Promise<{ status: string }>
+  async getEligibility(userId: string): Promise<{ paywall_trigger: string | null; days_active: number; total_logs: number; streak: number; is_pro: boolean }>
+  async submitFeedback(userId: string, input: { type?: string; message: string; app_version?: string }): Promise<{ status: string }>
 }
 ```
 
 ### Functions
 
 ```typescript
-const VALID_STATUSES: string[]
-const VALID_FEEDBACK_TYPES: string[]
+const VALID_STATUSES: Set<string>
+const VALID_FEEDBACK_TYPES: Set<string>
 function defaultPaywallTrigger(data: EngagementData): string
 ```
 
@@ -376,6 +372,7 @@ interface DeviceToken {
   app_version: string;
   enabled: boolean;
   last_seen_at: Date | string;
+  apns_topic?: string;           // APNs topic override (e.g. for watchOS)
 }
 
 interface NotificationPreferences {
@@ -417,11 +414,11 @@ interface NotifySchedulerConfig {
 ```typescript
 class NotifyService {
   constructor(db: NotifyDB, push: PushProvider)
-  handleRegisterDevice: (c: Context) => Promise<Response>       // POST   /api/v1/notifications/devices
-  handleDisableDevice: (c: Context) => Promise<Response>        // DELETE /api/v1/notifications/devices
-  handleGetPrefs: (c: Context) => Promise<Response>             // GET    /api/v1/notifications/preferences
-  handleUpdatePrefs: (c: Context) => Promise<Response>          // PUT    /api/v1/notifications/preferences
-  handleNotificationOpened: (c: Context) => Promise<Response>   // POST   /api/v1/notifications/opened
+  async registerDevice(userId: string, input: { token: string; platform?: string; device_model?: string; os_version?: string; app_version?: string; apns_topic?: string }): Promise<{ status: string }>
+  async disableDevice(userId: string, token: string): Promise<{ status: string }>
+  async getPreferences(userId: string): Promise<NotificationPreferences>
+  async updatePreferences(userId: string, input: Partial<{ push_enabled: boolean; interval_seconds: number; wake_hour: number; sleep_hour: number; timezone: string; stop_after_goal: boolean }>): Promise<NotificationPreferences>
+  async trackOpened(userId: string, notificationId?: string): Promise<void>
 }
 
 class NotifyScheduler {
@@ -622,12 +619,12 @@ interface WSEvent {
 ```typescript
 class ChatService {
   constructor(db: ChatDB, push: PushProvider, cfg: ChatConfig)
-  handleGetChat: (c: Context) => Promise<Response>          // GET  /api/v1/chat
-  handleSendChat: (c: Context) => Promise<Response>         // POST /api/v1/chat
-  handleUnreadCount: (c: Context) => Promise<Response>      // GET  /api/v1/chat/unread
-  handleAdminListChats: (c: Context) => Promise<Response>   // GET  /admin/api/chat
-  handleAdminGetChat: (c: Context) => Promise<Response>     // GET  /admin/api/chat/:user_id
-  handleAdminReplyChat: (c: Context) => Promise<Response>   // POST /admin/api/chat/:user_id
+  async getMessages(userId: string, opts?: { since_id?: number; limit?: number; offset?: number }): Promise<{ messages: ChatMessage[]; has_more: boolean }>
+  async sendMessage(userId: string, message: string, messageType?: string): Promise<{ status: string; id: number; created_at: Date | string }>
+  async getUnreadCount(userId: string): Promise<{ count: number }>
+  async adminListChats(limit?: number): Promise<{ threads: ChatThread[]; count: number }>
+  async adminGetMessages(userId: string, limit?: number, offset?: number): Promise<{ messages: ChatMessage[] }>
+  async adminReply(userId: string, message: string, messageType?: string): Promise<{ status: string; id: number; created_at: Date | string }>
   handleWSConnection(ws: WebSocket, userId: string, role: "user" | "admin"): () => void
   getHub(): Hub
 }
@@ -750,12 +747,14 @@ interface BatchResponse {
 interface DeviceInfo {
   deviceId: string;
   token: string;
+  apnsTopic?: string;   // APNs topic override (e.g. for watchOS)
 }
 
 interface SyncConfig {
   push?: PushProvider;
   deviceTokens?: DeviceTokenStore;
   idempotencyTtlMs?: number;  // default: 24h
+  pushDebounceMs?: number;    // default: 2500ms, 0 = no debounce
 }
 ```
 
@@ -765,9 +764,10 @@ interface SyncConfig {
 class SyncService {
   constructor(db: SyncDB, handler: EntityHandler, cfg?: SyncConfig)
   close(): void
-  handleSyncChanges: (c: Context) => Promise<Response>   // GET    /api/v1/sync/changes
-  handleSyncBatch: (c: Context) => Promise<Response>     // POST   /api/v1/sync/batch
-  handleSyncDelete: (c: Context) => Promise<Response>    // DELETE /api/v1/sync/:entity_type/:id
+  async getChanges(userId: string, opts?: { since?: string; deviceId?: string }): Promise<Record<string, unknown>>
+  async syncBatch(userId: string, items: BatchItem[], opts?: { deviceId?: string; idempotencyKey?: string }): Promise<BatchResponse>
+  async deleteEntity(userId: string, entityType: string, entityId: string, deviceId?: string): Promise<{ status: string }>
+  notifyOtherDevices(userId: string, excludeDeviceId?: string): void
 }
 ```
 
@@ -886,8 +886,8 @@ type SubscriptionStatus = typeof SUBSCRIPTION_STATUSES[number]
 ```typescript
 class ReceiptService {
   constructor(db: ReceiptDB, cfg: ReceiptConfig)
-  handleVerifyReceipt: (c: Context) => Promise<Response>   // POST /api/v1/receipt/verify
-  handleWebhook: (c: Context) => Promise<Response>         // POST /api/v1/receipt/webhook
+  async verifyReceipt(userId: string, transactionJWS: string): Promise<VerifyResponse>
+  async processWebhook(signedPayload: string): Promise<{ status: string }>
 }
 ```
 
@@ -1048,13 +1048,6 @@ class PaywallStore {
 }
 ```
 
-### Functions
-
-```typescript
-function handleGetConfig(store: PaywallStore): (c: Context) => Promise<Response>      // GET /api/v1/paywall/config
-function handleUpdateConfig(store: PaywallStore): (c: Context) => Promise<Response>   // PUT /admin/api/paywall/config
-```
-
 ---
 
 ## attest
@@ -1088,10 +1081,10 @@ interface AttestConfig {
 class AttestService {
   constructor(db?: AttestDB, cfg?: AttestConfig)
   generateHexNonce(): string
-  handleChallenge: (c: Context) => Promise<Response>                 // POST /api/v1/attest/challenge
-  handleVerify: (c: Context) => Promise<Response>                    // POST /api/v1/attest/verify
-  handleAssert: (c: Context) => Promise<Response>                    // POST /api/v1/attest/assert
-  requireAttest: (c: Context, next: () => Promise<void>) => Promise<Response>  // middleware
+  async createChallenge(userId: string): Promise<{ nonce: string }>
+  async verifyAttestation(userId: string, input: { key_id: string; attestation: string; nonce: string }): Promise<{ status: string }>
+  async verifyAssertion(userId: string, input: { assertion: string; client_data?: string; nonce: string }): Promise<{ status: string }>
+  async checkAttestation(userId: string): Promise<void>
 }
 ```
 
@@ -1149,9 +1142,9 @@ interface AccountConfig {
 ```typescript
 class AccountService {
   constructor(cfg: AccountConfig, db: AccountDB, opts?: { cleanup?: AppCleanup; exporter?: AppExporter })
-  handleDeleteAccount: (c: Context) => Promise<Response>      // DELETE /api/v1/account
-  handleAnonymizeAccount: (c: Context) => Promise<Response>   // POST   /api/v1/account/anonymize
-  handleExportData: (c: Context) => Promise<Response>         // GET    /api/v1/account/export
+  async deleteAccount(userId: string): Promise<{ status: string }>
+  async anonymizeAccount(userId: string): Promise<{ status: string }>
+  async exportData(userId: string): Promise<UserDataExport>
 }
 ```
 
@@ -1205,14 +1198,14 @@ class FlagsService {
   async getValue(key: string, userId: string): Promise<string | number | Record<string, unknown> | null>
   invalidate(key: string): void
   clearCache(): void
-  handleCheck: (c: Context) => Promise<Response>                  // GET    /api/v1/flags/:key
-  handleBatchCheck: (c: Context) => Promise<Response>             // POST   /api/v1/flags/check
-  handleAdminList: (c: Context) => Promise<Response>              // GET    /admin/api/flags
-  handleAdminCreate: (c: Context) => Promise<Response>            // POST   /admin/api/flags
-  handleAdminUpdate: (c: Context) => Promise<Response>            // PUT    /admin/api/flags/:key
-  handleAdminDelete: (c: Context) => Promise<Response>            // DELETE /admin/api/flags/:key (returns 404 for missing)
-  handleAdminSetOverride: (c: Context) => Promise<Response>       // POST   /admin/api/flags/:key/overrides
-  handleAdminDeleteOverride: (c: Context) => Promise<Response>    // DELETE /admin/api/flags/:key/overrides/:user_id
+  async check(userId: string, key: string): Promise<{ key: string; enabled: boolean; value?: string | null }>
+  async batchCheck(userId: string, keys: string[]): Promise<{ flags: Record<string, boolean> }>
+  async listFlags(): Promise<{ flags: Flag[] }>
+  async createFlag(input: { key?: string; enabled?: boolean; rollout_pct?: number; description?: string; value?: string; value_type?: string }): Promise<Flag>
+  async updateFlag(key: string, input: { enabled?: boolean; rollout_pct?: number; description?: string; value?: string; value_type?: string }): Promise<Flag>
+  async deleteFlag(key: string): Promise<{ status: string }>
+  async setOverride(key: string, userId: string, enabled: boolean): Promise<void>
+  async deleteOverride(key: string, userId: string): Promise<void>
 }
 ```
 
@@ -1314,8 +1307,7 @@ class LifecycleService {
   async evaluateUser(userId: string): Promise<EngagementScore>
   calculateScore(recentSessions: number, ahaReached: boolean, isPro: boolean, daysSinceActive: number, totalSessions: number): number
   async evaluateNotifications(userIds: string[]): Promise<void>
-  handleGetLifecycle: (c: Context) => Promise<Response>   // GET  /api/v1/user/lifecycle
-  handleAckPrompt: (c: Context) => Promise<Response>      // POST /api/v1/user/lifecycle/ack
+  async ackPrompt(userId: string, promptType: string, action: string): Promise<void>
 }
 ```
 
@@ -1360,90 +1352,11 @@ interface RetentionRow { cohort_date: string; day: number; retained_pct: number;
 ```typescript
 class AnalyticsService {
   constructor(db: AnalyticsDB)
-  handleDAU: (c: Context) => Promise<Response>         // GET /admin/api/analytics/dau
-  handleEvents: (c: Context) => Promise<Response>      // GET /admin/api/analytics/events
-  handleMRR: (c: Context) => Promise<Response>         // GET /admin/api/analytics/mrr (includes mrr_cents when available)
-  handleSummary: (c: Context) => Promise<Response>     // GET /admin/api/analytics/summary (includes trial_conversion_rate when available)
-  handleRetention: (c: Context) => Promise<Response>   // GET /admin/api/analytics/retention
-  handleRevenue: (c: Context) => Promise<Response>     // GET /admin/api/analytics/revenue
+  async getDau(since?: string): Promise<{ data: DAURow[] }>
+  async getEvents(opts?: { since?: string; event?: string }): Promise<{ data: EventRow[] }>
+  async getMrr(): Promise<{ breakdown: SubStats[]; new_30d: number; churned_30d: number; mrr_cents?: number }>
+  async getSummary(): Promise<{ dau: number; mau: number; total_users: number; active_subscriptions: number; trial_conversion_rate?: number }>
+  async getRetention(opts?: { since?: string; days?: string }): Promise<{ data: RetentionRow[] }>
+  async getRevenue(since?: string): Promise<{ data: RevenueRow[] }>
 }
 ```
-
----
-
-## app
-
-Hono app factory that wires all services and middleware into a single router.
-
-### Types
-
-```typescript
-interface AppConfig {
-  apiVersion: string;
-  minimumVersion: string;
-  corsOrigins?: string;
-  apiPrefix?: string;    // default: "/api/v1"
-  adminPrefix?: string;  // default: "/admin/api"
-  authConfig: AuthConfig;
-  adminConfig: AdminConfig;
-  auth: AuthService;
-  engage?: EngageService;
-  notify?: NotifyService;
-  chat?: ChatService;
-  sync?: SyncService;
-  flags?: FlagsService;
-  receipt?: ReceiptService;
-  lifecycle?: LifecycleService;
-  account?: AccountService;
-  analytics?: AnalyticsService;
-  attest?: AttestService;
-  health: HealthService;
-  paywallStore?: PaywallStore;
-  logBuffer?: LogBuffer;
-  maxBodySize?: number;       // default: 1MB
-  scheduler?: Scheduler;
-  notifyScheduler?: NotifyScheduler;
-}
-
-interface AppResources {
-  app: Hono;
-  /** Clean up rate limiters, schedulers, intervals. */
-  shutdown(): void;
-}
-```
-
-### Functions
-
-```typescript
-function createApp(cfg: AppConfig): AppResources
-function openApiSpec(): Record<string, unknown>
-```
-
-### Routes Wired
-
-**Auth** (always mounted):
-- `POST /api/v1/auth/apple` — mobile Sign in with Apple
-- `POST /api/v1/auth/apple/web` — web Sign in with Apple (OAuth2 code exchange)
-- `GET /api/v1/auth/me`
-- `POST /api/v1/auth/logout`
-- `POST /api/v1/auth/logout-all` — revoke all sessions
-- `GET /api/v1/auth/sessions` — list active sessions
-- `DELETE /api/v1/auth/sessions/:jti` — revoke specific session
-
-**Flags** (when `flags` provided):
-- `GET /api/v1/flags/:key`
-- `POST /api/v1/flags/check`
-- `GET /admin/api/flags`
-- `POST /admin/api/flags`
-- `PUT /admin/api/flags/:key`
-- `DELETE /admin/api/flags/:key`
-- `POST /admin/api/flags/:key/overrides`
-- `DELETE /admin/api/flags/:key/overrides/:user_id`
-
-**Analytics** (when `analytics` provided):
-- `GET /admin/api/analytics/dau`
-- `GET /admin/api/analytics/events`
-- `GET /admin/api/analytics/mrr`
-- `GET /admin/api/analytics/summary`
-- `GET /admin/api/analytics/retention`
-- `GET /admin/api/analytics/revenue`
