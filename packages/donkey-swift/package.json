@@ -5,8 +5,13 @@
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "postinstall": "tsc || true"
   },
+  "files": [
+    "dist",
+    "src"
+  ],
   "exports": {
     "./httputil": "./dist/httputil/index.js",
     "./middleware": "./dist/middleware/index.js",
