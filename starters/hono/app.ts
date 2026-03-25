@@ -14,6 +14,7 @@ import type { LifecycleService } from "../lifecycle/index.js";
 import type { AccountService } from "../account/index.js";
 import type { AnalyticsService } from "../analytics/index.js";
 import type { AttestService } from "../attest/index.js";
+import type { ConversionService } from "../conversion/index.js";
 import type { HealthService } from "../health/index.js";
 import type { PaywallStore } from "../paywall/index.js";
 import { handleGetConfig, handleUpdateConfig } from "../paywall/index.js";
@@ -54,6 +55,7 @@ export interface AppConfig {
   account?: AccountService;
   analytics?: AnalyticsService;
   attest?: AttestService;
+  conversion?: ConversionService;
   health: HealthService;
   paywallStore?: PaywallStore;
   logBuffer?: LogBuffer;
@@ -306,6 +308,31 @@ export function createApp(cfg: AppConfig): AppResources {
     app.post(`${api}/attest/challenge`, auth, rateLimit(writeRl), at.handleChallenge);
     app.post(`${api}/attest/verify`, auth, rateLimit(writeRl), at.handleVerify);
     app.post(`${api}/attest/assert`, auth, rateLimit(writeRl), at.handleAssert);
+  }
+
+  // ── Conversion ──
+  if (cfg.conversion) {
+    const cv = cfg.conversion;
+    app.post(`${api}/conversion/dismissal`, auth, rateLimit(writeRl), wrap(async (c) => {
+      await cv.recordDismissal(c.get("userId") as string);
+      return { status: "ok" };
+    }));
+    app.get(`${api}/conversion/eligibility`, auth, wrap(async (c) => {
+      const stage = c.req.query("stage");
+      const daysSinceActive = c.req.query("days_since_active");
+      return cv.checkEligibility(c.get("userId") as string, {
+        stage: stage ?? undefined,
+        daysSinceActive: daysSinceActive ? Number(daysSinceActive) : undefined,
+      });
+    }));
+    app.get(`${api}/conversion/offer`, auth, wrap(async (c) => {
+      const offer = await cv.getActiveOffer(c.get("userId") as string);
+      return { offer };
+    }));
+    app.post(`${api}/conversion/redeem`, auth, rateLimit(writeRl), wrap(async (c) => {
+      await cv.redeemOffer(c.get("userId") as string);
+      return { status: "redeemed" };
+    }));
   }
 
   // ── Paywall ──

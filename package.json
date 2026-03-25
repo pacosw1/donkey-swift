@@ -34,7 +34,10 @@
     "./flags": "./dist/flags/index.js",
     "./lifecycle": "./dist/lifecycle/index.js",
     "./analytics": "./dist/analytics/index.js",
-    "./appstore": "./dist/appstore/index.js"
+    "./appstore": "./dist/appstore/index.js",
+    "./promo": "./dist/promo/index.js",
+    "./grants": "./dist/grants/index.js",
+    "./conversion": "./dist/conversion/index.js"
   },
   "typesVersions": {
     "*": {
@@ -59,7 +62,10 @@
       "flags": ["dist/flags/index.d.ts"],
       "lifecycle": ["dist/lifecycle/index.d.ts"],
       "analytics": ["dist/analytics/index.d.ts"],
-      "appstore": ["dist/appstore/index.d.ts"]
+      "appstore": ["dist/appstore/index.d.ts"],
+      "promo": ["dist/promo/index.d.ts"],
+      "grants": ["dist/grants/index.d.ts"],
+      "conversion": ["dist/conversion/index.d.ts"]
     }
   },
   "dependencies": {

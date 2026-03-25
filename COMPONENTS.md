@@ -299,12 +299,10 @@ interface UserSubscription {
 
 interface EngagementData {
   days_active: number;
-  total_logs: number;
   current_streak: number;
   subscription_status: string;
-  paywall_shown_count: number;
-  last_paywall_date: string;
-  goals_completed_total: number;
+  /** App-specific metrics. Apps put their domain data here. */
+  metrics: Record<string, number>;
 }
 
 type EventHook = (userId: string, events: EventInput[]) => void;
@@ -323,7 +321,7 @@ class EngageService {
   async trackEvents(userId: string, events: Array<{ event: string; metadata?: unknown; timestamp?: string }>): Promise<{ tracked: number }>
   async updateSubscription(userId: string, input: { product_id?: string; status?: string; expires_at?: string; original_transaction_id?: string; price_cents?: number; currency_code?: string }): Promise<UserSubscription | { status: string }>
   async reportSession(userId: string, input: { session_id: string; action: "start" | "end"; app_version?: string; os_version?: string; country?: string; duration_s?: number }): Promise<{ status: string }>
-  async getEligibility(userId: string): Promise<{ paywall_trigger: string | null; days_active: number; total_logs: number; streak: number; is_pro: boolean }>
+  async getEligibility(userId: string): Promise<{ paywall_trigger: string | null; days_active: number; current_streak: number; is_pro: boolean; metrics: Record<string, number> }>
   async submitFeedback(userId: string, input: { type?: string; message: string; app_version?: string }): Promise<{ status: string }>
 }
 ```
@@ -333,7 +331,7 @@ class EngageService {
 ```typescript
 const VALID_STATUSES: Set<string>
 const VALID_FEEDBACK_TYPES: Set<string>
-function defaultPaywallTrigger(data: EngagementData): string
+function examplePaywallTrigger(data: EngagementData): string
 ```
 
 ---
@@ -1358,5 +1356,195 @@ class AnalyticsService {
   async getSummary(): Promise<{ dau: number; mau: number; total_users: number; active_subscriptions: number; trial_conversion_rate?: number }>
   async getRetention(opts?: { since?: string; days?: string }): Promise<{ data: RetentionRow[] }>
   async getRevenue(since?: string): Promise<{ data: RevenueRow[] }>
+}
+```
+
+---
+
+## promo
+
+Influencer promo codes with redemption tracking, commission calculation, and a self-service influencer portal.
+
+### DB Interface
+
+```typescript
+interface PromoDB {
+  getCode(code: string): Promise<PromoCode | null>;
+  createCode(code: PromoCode): Promise<void>;
+  updateCode(code: string, updates: Partial<PromoCode>): Promise<void>;
+  listCodes(opts?: { influencer_id?: string; active?: boolean }): Promise<PromoCode[]>;
+  incrementRedeemed(code: string): Promise<void>;
+
+  recordRedemption(redemption: PromoRedemption): Promise<void>;
+  hasRedeemed(userId: string, code: string): Promise<boolean>;
+  listRedemptions(opts: { influencer_id?: string; code?: string }): Promise<PromoRedemption[]>;
+
+  getInfluencer(id: string): Promise<Influencer | null>;
+  getInfluencerByToken(portalToken: string): Promise<Influencer | null>;
+  createInfluencer(influencer: Influencer): Promise<void>;
+  updateInfluencer(id: string, updates: Partial<Influencer>): Promise<void>;
+  listInfluencers(): Promise<Influencer[]>;
+}
+```
+
+### Types
+
+```typescript
+type CommissionModel =
+  | { type: "revenue_share"; percent: number }
+  | { type: "flat_per_purchase"; amount_cents: number; currency: string }
+  | { type: "flat_per_redemption"; amount_cents: number; currency: string };
+
+interface Influencer {
+  id: string;
+  name: string;
+  email?: string;
+  portal_token: string;
+  commission: CommissionModel;
+  active: boolean;
+  created_at: Date;
+}
+
+interface PromoCode {
+  code: string;
+  influencer_id: string;
+  type: "discount" | "trial_extension" | "premium_grant";
+  discount_pct?: number;
+  grant_days?: number;
+  max_redemptions: number;
+  redeemed_count: number;
+  expires_at?: Date;
+  active: boolean;
+  created_at: Date;
+}
+
+interface PromoRedemption {
+  id: string;
+  user_id: string;
+  code: string;
+  influencer_id: string;
+  redeemed_at: Date;
+  purchase_amount_cents?: number;
+  commission_cents?: number;
+}
+```
+
+### Functions
+
+```typescript
+class PromoService {
+  constructor(db: PromoDB)
+  async redeemCode(userId: string, code: string): Promise<{ type: PromoCode["type"]; discount_pct?: number; grant_days?: number }>
+  async recordPurchase(userId: string, code: string, amountCents: number): Promise<void>
+  async getInfluencerStats(influencerId: string): Promise<{ totalRedemptions: number; totalPurchases: number; totalEarningsCents: number; codes: PromoCode[] }>
+  async getInfluencerPortal(portalToken: string): Promise<{ influencer: Omit<Influencer, "portal_token">; stats: { totalRedemptions: number; totalPurchases: number; totalEarningsCents: number }; recentRedemptions: Array<{ code: string; redeemed_at: Date }> }>
+  async createCode(input: { code?: string; influencer_id?: string; type?: PromoCode["type"]; discount_pct?: number; grant_days?: number; max_redemptions?: number; expires_at?: Date }): Promise<PromoCode>
+  async updateCode(code: string, input: { discount_pct?: number; grant_days?: number; max_redemptions?: number; expires_at?: Date; active?: boolean }): Promise<PromoCode>
+  async deactivateCode(code: string): Promise<void>
+  async listCodes(opts?: { influencer_id?: string; active?: boolean }): Promise<PromoCode[]>
+  async createInfluencer(input: { id?: string; name?: string; email?: string; commission?: CommissionModel }): Promise<Influencer>
+  async updateInfluencer(id: string, input: { name?: string; email?: string; commission?: CommissionModel; active?: boolean }): Promise<void>
+  async listInfluencers(): Promise<Influencer[]>
+}
+```
+
+---
+
+## grants
+
+Manual premium grants with expiry and revocation for admin-granted access (comp accounts, support, promotions).
+
+### DB Interface
+
+```typescript
+interface GrantDB {
+  createGrant(grant: PremiumGrant): Promise<void>;
+  getActiveGrant(userId: string): Promise<PremiumGrant | null>;
+  listGrants(userId: string): Promise<PremiumGrant[]>;
+  revokeGrant(grantId: string, revokedAt: Date): Promise<void>;
+  listAllActiveGrants(): Promise<PremiumGrant[]>;
+}
+```
+
+### Types
+
+```typescript
+interface PremiumGrant {
+  id: string;
+  user_id: string;
+  granted_by: string;
+  reason: string;
+  product_id?: string;
+  expires_at?: Date;
+  created_at: Date;
+  revoked_at?: Date;
+}
+```
+
+### Functions
+
+```typescript
+class GrantService {
+  constructor(db: GrantDB)
+  async grantPremium(input: { userId?: string; grantedBy?: string; reason?: string; productId?: string; days?: number }): Promise<PremiumGrant>
+  async isGrantedPremium(userId: string): Promise<boolean>
+  async getActiveGrant(userId: string): Promise<PremiumGrant | null>
+  async revokeGrant(grantId: string): Promise<void>
+  async listGrants(userId: string): Promise<PremiumGrant[]>
+  async listAllActiveGrants(): Promise<PremiumGrant[]>
+}
+```
+
+---
+
+## conversion
+
+Discount offers for converting free users to paid, triggered by paywall dismissals, lifecycle stage, or inactivity. Includes dismissal tracking, cooldown periods, and offer expiry.
+
+### DB Interface
+
+```typescript
+interface ConversionDB {
+  getActiveOffer(userId: string): Promise<ConversionOffer | null>;
+  createOffer(offer: ConversionOffer): Promise<void>;
+  markRedeemed(userId: string): Promise<void>;
+  countDismissals(userId: string, since: Date): Promise<number>;
+  recordDismissal(userId: string): Promise<void>;
+  lastOfferDate(userId: string): Promise<Date | string | null>;
+}
+```
+
+### Types
+
+```typescript
+interface ConversionOffer {
+  user_id: string;
+  discount_pct: number;
+  product_id?: string;
+  expires_at: Date | string;
+  trigger: "paywall_dismissals" | "lifecycle_stage" | "inactivity_winback";
+  redeemed: boolean;
+  created_at: Date | string;
+}
+
+interface ConversionConfig {
+  dismissalThreshold?: number;   // default: 3
+  discountPct?: number;          // default: 20
+  offerTtlMinutes?: number;      // default: 1440 (24h)
+  cooldownDays?: number;         // default: 7
+  triggerStages?: string[];      // default: ["at_risk"]
+  inactivityDays?: number;       // default: 14
+}
+```
+
+### Functions
+
+```typescript
+class ConversionService {
+  constructor(cfg: ConversionConfig, db: ConversionDB)
+  async recordDismissal(userId: string): Promise<void>
+  async checkEligibility(userId: string, opts?: { stage?: string; daysSinceActive?: number }): Promise<ConversionOffer | null>
+  async getActiveOffer(userId: string): Promise<ConversionOffer | null>
+  async redeemOffer(userId: string): Promise<void>
 }
 ```

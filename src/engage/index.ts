@@ -31,12 +31,10 @@ export interface UserSubscription {
 
 export interface EngagementData {
   days_active: number;
-  total_logs: number;
   current_streak: number;
   subscription_status: string;
-  paywall_shown_count: number;
-  last_paywall_date: string;
-  goals_completed_total: number;
+  /** App-specific metrics. Apps put their domain data here. */
+  metrics: Record<string, number>;
 }
 
 export type EventHook = (userId: string, events: EventInput[]) => void;
@@ -47,9 +45,9 @@ export interface EngageConfig {
 
 // ── Default Paywall Trigger ─────────────────────────────────────────────────
 
-export function defaultPaywallTrigger(data: EngagementData): string {
-  if (data.days_active >= 14 && data.total_logs >= 50) return "power_user";
-  if (data.goals_completed_total >= 10 && data.paywall_shown_count < 3) return "milestone";
+export function examplePaywallTrigger(data: EngagementData): string {
+  if (data.days_active >= 14 && (data.metrics["total_logs"] ?? 0) >= 50) return "power_user";
+  if ((data.metrics["goals_completed"] ?? 0) >= 10 && (data.metrics["paywall_shown"] ?? 0) < 3) return "milestone";
   return "";
 }
 
@@ -66,7 +64,7 @@ export class EngageService {
     private cfg: EngageConfig,
     private db: EngageDB
   ) {
-    this.paywallTrigger = cfg.paywallTrigger ?? defaultPaywallTrigger;
+    this.paywallTrigger = cfg.paywallTrigger ?? examplePaywallTrigger;
   }
 
   registerEventHook(hook: EventHook): void {
@@ -171,7 +169,7 @@ export class EngageService {
 
   async getEligibility(
     userId: string
-  ): Promise<{ paywall_trigger: string | null; days_active: number; total_logs: number; streak: number; is_pro: boolean }> {
+  ): Promise<{ paywall_trigger: string | null; days_active: number; current_streak: number; is_pro: boolean; metrics: Record<string, number> }> {
     let data: EngagementData;
     try {
       data = await this.db.getEngagementData(userId);
@@ -190,9 +188,9 @@ export class EngageService {
     return {
       paywall_trigger: paywallTrigger,
       days_active: data.days_active,
-      total_logs: data.total_logs,
-      streak: data.current_streak,
+      current_streak: data.current_streak,
       is_pro: isPro,
+      metrics: data.metrics,
     };
   }
 

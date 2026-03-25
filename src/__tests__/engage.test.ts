@@ -11,12 +11,9 @@ function mockDB(overrides: Partial<EngageDB> = {}): EngageDB {
     isProUser: vi.fn().mockResolvedValue(false),
     getEngagementData: vi.fn().mockResolvedValue({
       days_active: 0,
-      total_logs: 0,
       current_streak: 0,
       subscription_status: "free",
-      paywall_shown_count: 0,
-      last_paywall_date: "",
-      goals_completed_total: 0,
+      metrics: {},
     }),
     startSession: vi.fn().mockResolvedValue(undefined),
     endSession: vi.fn().mockResolvedValue(undefined),

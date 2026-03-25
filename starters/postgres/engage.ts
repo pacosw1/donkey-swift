@@ -93,18 +93,16 @@ export function withEngageDB(db: DrizzleDB): EngageDB {
     },
 
     async getEngagementData(userId: string): Promise<EngagementData> {
-      const [metrics] = await db.execute<{
+      const [row] = await db.execute<{
         days_active: string;
         total_logs: string;
         paywall_shown_count: string;
-        last_paywall_date: string;
         goals_completed_total: string;
       }>(sql`
         SELECT
           COUNT(DISTINCT DATE(created_at)) AS days_active,
           COUNT(*) AS total_logs,
           COUNT(*) FILTER (WHERE event = 'paywall_shown') AS paywall_shown_count,
-          COALESCE(MAX(created_at) FILTER (WHERE event = 'paywall_shown'), '1970-01-01')::TEXT AS last_paywall_date,
           COUNT(*) FILTER (WHERE event = 'goal_completed') AS goals_completed_total
         FROM user_activity
         WHERE user_id = ${userId}
@@ -128,8 +126,8 @@ export function withEngageDB(db: DrizzleDB): EngageDB {
       today.setUTCHours(0, 0, 0, 0);
       let expected = new Date(today);
 
-      for (const row of streakRows) {
-        const day = new Date(row.d);
+      for (const r of streakRows) {
+        const day = new Date(r.d);
         day.setUTCHours(0, 0, 0, 0);
         if (day.getTime() === expected.getTime()) {
           streak++;
@@ -140,13 +138,14 @@ export function withEngageDB(db: DrizzleDB): EngageDB {
       }
 
       return {
-        days_active: Number(metrics?.days_active ?? 0),
-        total_logs: Number(metrics?.total_logs ?? 0),
+        days_active: Number(row?.days_active ?? 0),
         current_streak: streak,
         subscription_status: subRow?.status ?? "free",
-        paywall_shown_count: Number(metrics?.paywall_shown_count ?? 0),
-        last_paywall_date: metrics?.last_paywall_date ?? "1970-01-01",
-        goals_completed_total: Number(metrics?.goals_completed_total ?? 0),
+        metrics: {
+          total_logs: Number(row?.total_logs ?? 0),
+          paywall_shown: Number(row?.paywall_shown_count ?? 0),
+          goals_completed: Number(row?.goals_completed_total ?? 0),
+        },
       };
     },
 

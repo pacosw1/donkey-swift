@@ -215,6 +215,87 @@ export const userNotificationPreferences = pgTable(
   }
 );
 
+// ── influencers (promo) ───────────────────────────────────────────────────
+
+export const influencers = pgTable("influencers", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  email: text("email"),
+  portalToken: text("portal_token").notNull().unique(),
+  commissionType: text("commission_type").notNull().default("revenue_share"),
+  commissionValue: integer("commission_value").notNull().default(20),
+  commissionCurrency: text("commission_currency").notNull().default("USD"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ── promo_codes (promo) ─────────────────────────────────────────────────
+
+export const promoCodes = pgTable("promo_codes", {
+  code: text("code").primaryKey(),
+  influencerId: text("influencer_id").notNull(),
+  type: text("type").notNull().default("discount"),
+  discountPct: integer("discount_pct"),
+  grantDays: integer("grant_days"),
+  maxRedemptions: integer("max_redemptions").notNull().default(0),
+  redeemedCount: integer("redeemed_count").notNull().default(0),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ── promo_redemptions (promo) ───────────────────────────────────────────
+
+export const promoRedemptions = pgTable("promo_redemptions", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  code: text("code").notNull(),
+  influencerId: text("influencer_id").notNull(),
+  redeemedAt: timestamp("redeemed_at", { withTimezone: true }).notNull().defaultNow(),
+  purchaseAmountCents: integer("purchase_amount_cents"),
+  commissionCents: integer("commission_cents"),
+}, (table) => [
+  index("idx_promo_redemptions_user").on(table.userId),
+  index("idx_promo_redemptions_influencer").on(table.influencerId),
+]);
+
+// ── premium_grants (grants) ─────────────────────────────────────────────
+
+export const premiumGrants = pgTable("premium_grants", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  grantedBy: text("granted_by").notNull(),
+  reason: text("reason").notNull(),
+  productId: text("product_id"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+}, (table) => [
+  index("idx_premium_grants_user").on(table.userId),
+]);
+
+// ── conversion_offers (conversion) ──────────────────────────────────────
+
+export const conversionOffers = pgTable("conversion_offers", {
+  userId: text("user_id").primaryKey(),
+  discountPct: integer("discount_pct").notNull(),
+  productId: text("product_id"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  trigger: text("trigger").notNull(),
+  redeemed: boolean("redeemed").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ── conversion_dismissals (conversion) ──────────────────────────────────
+
+export const conversionDismissals = pgTable("conversion_dismissals", {
+  id: serial("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("idx_conversion_dismissals_user").on(table.userId, table.createdAt),
+]);
+
 // ── notification_deliveries (notify) ─────────────────────────────────────────
 
 export const notificationDeliveries = pgTable(

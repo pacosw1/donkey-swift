@@ -1,9 +1,9 @@
 import { ValidationError, ServiceError } from "../errors/index.js";
 // ── Default Paywall Trigger ─────────────────────────────────────────────────
-export function defaultPaywallTrigger(data) {
-    if (data.days_active >= 14 && data.total_logs >= 50)
+export function examplePaywallTrigger(data) {
+    if (data.days_active >= 14 && (data.metrics["total_logs"] ?? 0) >= 50)
         return "power_user";
-    if (data.goals_completed_total >= 10 && data.paywall_shown_count < 3)
+    if ((data.metrics["goals_completed"] ?? 0) >= 10 && (data.metrics["paywall_shown"] ?? 0) < 3)
         return "milestone";
     return "";
 }
@@ -18,7 +18,7 @@ export class EngageService {
     constructor(cfg, db) {
         this.cfg = cfg;
         this.db = db;
-        this.paywallTrigger = cfg.paywallTrigger ?? defaultPaywallTrigger;
+        this.paywallTrigger = cfg.paywallTrigger ?? examplePaywallTrigger;
     }
     registerEventHook(hook) {
         this.eventHooks.push(hook);
@@ -109,9 +109,9 @@ export class EngageService {
         return {
             paywall_trigger: paywallTrigger,
             days_active: data.days_active,
-            total_logs: data.total_logs,
-            streak: data.current_streak,
+            current_streak: data.current_streak,
             is_pro: isPro,
+            metrics: data.metrics,
         };
     }
     async submitFeedback(userId, input) {

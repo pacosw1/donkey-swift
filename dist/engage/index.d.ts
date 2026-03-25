@@ -24,18 +24,16 @@ export interface UserSubscription {
 }
 export interface EngagementData {
     days_active: number;
-    total_logs: number;
     current_streak: number;
     subscription_status: string;
-    paywall_shown_count: number;
-    last_paywall_date: string;
-    goals_completed_total: number;
+    /** App-specific metrics. Apps put their domain data here. */
+    metrics: Record<string, number>;
 }
 export type EventHook = (userId: string, events: EventInput[]) => void;
 export interface EngageConfig {
     paywallTrigger?: (data: EngagementData) => string;
 }
-export declare function defaultPaywallTrigger(data: EngagementData): string;
+export declare function examplePaywallTrigger(data: EngagementData): string;
 export declare const VALID_STATUSES: Set<string>;
 export declare const VALID_FEEDBACK_TYPES: Set<string>;
 export declare class EngageService {
@@ -75,9 +73,9 @@ export declare class EngageService {
     getEligibility(userId: string): Promise<{
         paywall_trigger: string | null;
         days_active: number;
-        total_logs: number;
-        streak: number;
+        current_streak: number;
         is_pro: boolean;
+        metrics: Record<string, number>;
     }>;
     submitFeedback(userId: string, input: {
         type?: string;
