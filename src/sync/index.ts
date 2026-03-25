@@ -59,6 +59,11 @@ export interface DeviceInfo {
   apnsTopic?: string;
 }
 
+export interface DeviceExclude {
+  deviceId?: string;
+  token?: string;
+}
+
 export interface SyncConfig {
   push?: PushProvider;
   deviceTokens?: DeviceTokenStore;
@@ -81,7 +86,7 @@ export class SyncService {
   private idempCache = new Map<string, IdempEntry>();
   private idempTtlMs: number;
   private pushDebounceMs: number;
-  private pendingPush = new Map<string, { timer: ReturnType<typeof setTimeout>; excludeDeviceId: string }>();
+  private pendingPush = new Map<string, { timer: ReturnType<typeof setTimeout>; exclude: DeviceExclude }>();
   private cleanupInterval: ReturnType<typeof setInterval>;
 
   constructor(
@@ -108,7 +113,7 @@ export class SyncService {
     this.pendingPush.clear();
   }
 
-  async getChanges(userId: string, opts?: { since?: string; deviceId?: string }): Promise<Record<string, unknown>> {
+  async getChanges(userId: string, opts?: { since?: string; deviceId?: string; deviceToken?: string }): Promise<Record<string, unknown>> {
     const deviceId = opts?.deviceId ?? "";
 
     let syncedAt: Date | string;
@@ -149,8 +154,9 @@ export class SyncService {
     return result;
   }
 
-  async syncBatch(userId: string, items: BatchItem[], opts?: { deviceId?: string; idempotencyKey?: string }): Promise<BatchResponse> {
+  async syncBatch(userId: string, items: BatchItem[], opts?: { deviceId?: string; deviceToken?: string; idempotencyKey?: string }): Promise<BatchResponse> {
     const deviceId = opts?.deviceId ?? "";
+    const deviceToken = opts?.deviceToken ?? "";
     const rawIdempKey = opts?.idempotencyKey ?? "";
     const idempKey = rawIdempKey ? `${userId}:${rawIdempKey}` : "";
 
@@ -198,14 +204,19 @@ export class SyncService {
     }
 
     if (resp.items.length > 0) {
-      this.notifyOtherDevices(userId, deviceId);
+      this.notifyOtherDevices(userId, { deviceId: deviceId || undefined, token: deviceToken || undefined });
     }
 
     return resp;
   }
 
-  async deleteEntity(userId: string, entityType: string, entityId: string, deviceId?: string): Promise<{ status: string }> {
+  async deleteEntity(userId: string, entityType: string, entityId: string, opts?: string | { deviceId?: string; deviceToken?: string }): Promise<{ status: string }> {
     if (!entityType || !entityId) throw new ValidationError("entity_type and id are required");
+
+    // Backward compat: accept a plain string (treated as deviceId) or the new object shape
+    const exclude: DeviceExclude = typeof opts === "string"
+      ? { deviceId: opts || undefined }
+      : { deviceId: opts?.deviceId || undefined, token: opts?.deviceToken || undefined };
 
     try {
       await this.handler.delete(userId, entityType, entityId);
@@ -219,20 +230,22 @@ export class SyncService {
       throw new ServiceError("INTERNAL", "failed to record tombstone");
     }
 
-    this.notifyOtherDevices(userId, deviceId ?? "");
+    this.notifyOtherDevices(userId, exclude);
     return { status: "deleted" };
   }
 
   /** Notify other devices of a sync event. Debounced per user. */
-  notifyOtherDevices(userId: string, excludeDeviceId: string = ""): void {
+  notifyOtherDevices(userId: string, exclude?: DeviceExclude): void {
     if (!this.push || !this.tokens) {
       console.log(`[sync] notifyOtherDevices skipped — no push/tokens configured`);
       return;
     }
 
+    const ex: DeviceExclude = exclude ?? {};
+
     // No debounce — fire immediately
     if (this.pushDebounceMs <= 0) {
-      this.fireNotify(userId, excludeDeviceId);
+      this.fireNotify(userId, ex);
       return;
     }
 
@@ -244,22 +257,26 @@ export class SyncService {
 
     const timer = setTimeout(() => {
       this.pendingPush.delete(userId);
-      this.fireNotify(userId, excludeDeviceId);
+      this.fireNotify(userId, ex);
     }, this.pushDebounceMs);
 
-    this.pendingPush.set(userId, { timer, excludeDeviceId });
+    this.pendingPush.set(userId, { timer, exclude: ex });
   }
 
-  private fireNotify(userId: string, excludeDeviceId: string): void {
+  private fireNotify(userId: string, exclude: DeviceExclude): void {
     this.tokens!.enabledTokensForUser(userId).then((devices) => {
-      console.log(`[sync] firing silent push for ${userId}: ${devices.length} devices, exclude=${excludeDeviceId || "none"}`);
+      console.log(`[sync] firing silent push for ${userId}: ${devices.length} devices, exclude=${JSON.stringify(exclude)}`);
       const data = { action: "sync" };
       let sent = 0;
       for (const d of devices) {
-        // Exclude by deviceId OR by token (iOS sends token as X-Device-Token)
-        if (excludeDeviceId && (d.deviceId === excludeDeviceId || d.token === excludeDeviceId)) {
-          console.log(`[sync] skip device ...${d.token.slice(-8)} (requester)`);
-          continue;
+        // Exclude by deviceId and/or token — each field checked independently
+        if (exclude) {
+          const skip = (exclude.deviceId && d.deviceId === exclude.deviceId) ||
+                       (exclude.token && d.token === exclude.token);
+          if (skip) {
+            console.log(`[sync] skip device ...${d.token.slice(-8)} (requester)`);
+            continue;
+          }
         }
         const short = `...${d.token.slice(-8)}`;
         const sendFn = (d.apnsTopic && this.push!.sendRich)

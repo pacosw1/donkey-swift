@@ -4,6 +4,7 @@ import {
   type SyncDB,
   type EntityHandler,
   type BatchItem,
+  type DeviceExclude,
 } from "../sync/index.js";
 import { ValidationError, ServiceError } from "../errors/index.js";
 

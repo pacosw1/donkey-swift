@@ -309,20 +309,26 @@ app.get(`${api}/chat/unread`, requireAuth, async (c) => {
 app.get(`${api}/sync/changes`, requireAuth, async (c) => {
   return c.json(await sync.getChanges(uid(c), {
     since: c.req.query("since"),
-    deviceId: c.req.header("x-device-id"),
+    deviceId: c.req.header("x-device-id") || c.req.query("device_id") || "",
+    deviceToken: c.req.header("x-device-token") || "",
   }));
 });
 
 app.post(`${api}/sync/batch`, requireAuth, async (c) => {
-  const { items } = await c.req.json();
-  return c.json(await sync.syncBatch(uid(c), items, {
-    deviceId: c.req.header("x-device-id"),
+  const body = await c.req.json();
+  const deviceId = c.req.header("x-device-id") || c.req.query("device_id") || body.device_id || "";
+  const deviceToken = c.req.header("x-device-token") || "";
+  return c.json(await sync.syncBatch(uid(c), body.items, {
+    deviceId,
+    deviceToken,
     idempotencyKey: c.req.header("x-idempotency-key"),
   }));
 });
 
 app.delete(`${api}/sync/:entity_type/:id`, requireAuth, async (c) => {
-  return c.json(await sync.deleteEntity(uid(c), c.req.param("entity_type"), c.req.param("id"), c.req.header("x-device-id")));
+  const deviceId = c.req.header("x-device-id") || c.req.query("device_id") || "";
+  const deviceToken = c.req.header("x-device-token") || "";
+  return c.json(await sync.deleteEntity(uid(c), c.req.param("entity_type"), c.req.param("id"), { deviceId, deviceToken }));
 });
 
 // ── Flags ────────────────────────────────────────────────────────────────────
