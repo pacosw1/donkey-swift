@@ -71,6 +71,7 @@ export class SyncService {
     }
     async syncBatch(userId, items, opts) {
         const deviceId = opts?.deviceId ?? "";
+        const deviceToken = opts?.deviceToken ?? "";
         const rawIdempKey = opts?.idempotencyKey ?? "";
         const idempKey = rawIdempKey ? `${userId}:${rawIdempKey}` : "";
         // Check idempotency cache
@@ -118,13 +119,17 @@ export class SyncService {
             this.idempCache.set(idempKey, { resp, expiresAt: Date.now() + this.idempTtlMs });
         }
         if (resp.items.length > 0) {
-            this.notifyOtherDevices(userId, deviceId);
+            this.notifyOtherDevices(userId, { deviceId: deviceId || undefined, token: deviceToken || undefined });
         }
         return resp;
     }
-    async deleteEntity(userId, entityType, entityId, deviceId) {
+    async deleteEntity(userId, entityType, entityId, opts) {
         if (!entityType || !entityId)
             throw new ValidationError("entity_type and id are required");
+        // Backward compat: accept a plain string (treated as deviceId) or the new object shape
+        const exclude = typeof opts === "string"
+            ? { deviceId: opts || undefined }
+            : { deviceId: opts?.deviceId || undefined, token: opts?.deviceToken || undefined };
         try {
             await this.handler.delete(userId, entityType, entityId);
         }
@@ -137,18 +142,19 @@ export class SyncService {
         catch {
             throw new ServiceError("INTERNAL", "failed to record tombstone");
         }
-        this.notifyOtherDevices(userId, deviceId ?? "");
+        this.notifyOtherDevices(userId, exclude);
         return { status: "deleted" };
     }
     /** Notify other devices of a sync event. Debounced per user. */
-    notifyOtherDevices(userId, excludeDeviceId = "") {
+    notifyOtherDevices(userId, exclude) {
         if (!this.push || !this.tokens) {
             console.log(`[sync] notifyOtherDevices skipped — no push/tokens configured`);
             return;
         }
+        const ex = exclude ?? {};
         // No debounce — fire immediately
         if (this.pushDebounceMs <= 0) {
-            this.fireNotify(userId, excludeDeviceId);
+            this.fireNotify(userId, ex);
             return;
         }
         // Debounce: reset timer on each call, only fire after quiet period
@@ -158,20 +164,24 @@ export class SyncService {
         console.log(`[sync] debounced push queued for ${userId} (${this.pushDebounceMs}ms)`);
         const timer = setTimeout(() => {
             this.pendingPush.delete(userId);
-            this.fireNotify(userId, excludeDeviceId);
+            this.fireNotify(userId, ex);
         }, this.pushDebounceMs);
-        this.pendingPush.set(userId, { timer, excludeDeviceId });
+        this.pendingPush.set(userId, { timer, exclude: ex });
     }
-    fireNotify(userId, excludeDeviceId) {
+    fireNotify(userId, exclude) {
         this.tokens.enabledTokensForUser(userId).then((devices) => {
-            console.log(`[sync] firing silent push for ${userId}: ${devices.length} devices, exclude=${excludeDeviceId || "none"}`);
+            console.log(`[sync] firing silent push for ${userId}: ${devices.length} devices, exclude=${JSON.stringify(exclude)}`);
             const data = { action: "sync" };
             let sent = 0;
             for (const d of devices) {
-                // Exclude by deviceId OR by token (iOS sends token as X-Device-Token)
-                if (excludeDeviceId && (d.deviceId === excludeDeviceId || d.token === excludeDeviceId)) {
-                    console.log(`[sync] skip device ...${d.token.slice(-8)} (requester)`);
-                    continue;
+                // Exclude by deviceId and/or token — each field checked independently
+                if (exclude) {
+                    const skip = (exclude.deviceId && d.deviceId === exclude.deviceId) ||
+                        (exclude.token && d.token === exclude.token);
+                    if (skip) {
+                        console.log(`[sync] skip device ...${d.token.slice(-8)} (requester)`);
+                        continue;
+                    }
                 }
                 const short = `...${d.token.slice(-8)}`;
                 const sendFn = (d.apnsTopic && this.push.sendRich)

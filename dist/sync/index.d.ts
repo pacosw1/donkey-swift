@@ -49,6 +49,10 @@ export interface DeviceInfo {
     /** APNs topic override (e.g. for watchOS devices). Passed through to push headers. */
     apnsTopic?: string;
 }
+export interface DeviceExclude {
+    deviceId?: string;
+    token?: string;
+}
 export interface SyncConfig {
     push?: PushProvider;
     deviceTokens?: DeviceTokenStore;
@@ -72,16 +76,21 @@ export declare class SyncService {
     getChanges(userId: string, opts?: {
         since?: string;
         deviceId?: string;
+        deviceToken?: string;
     }): Promise<Record<string, unknown>>;
     syncBatch(userId: string, items: BatchItem[], opts?: {
         deviceId?: string;
+        deviceToken?: string;
         idempotencyKey?: string;
     }): Promise<BatchResponse>;
-    deleteEntity(userId: string, entityType: string, entityId: string, deviceId?: string): Promise<{
+    deleteEntity(userId: string, entityType: string, entityId: string, opts?: string | {
+        deviceId?: string;
+        deviceToken?: string;
+    }): Promise<{
         status: string;
     }>;
     /** Notify other devices of a sync event. Debounced per user. */
-    notifyOtherDevices(userId: string, excludeDeviceId?: string): void;
+    notifyOtherDevices(userId: string, exclude?: DeviceExclude): void;
     private fireNotify;
 }
 //# sourceMappingURL=index.d.ts.map
