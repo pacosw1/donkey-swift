@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install
+
+      - name: Type-check
+        run: bun run check
+
+      - name: Test
+        run: bun run test
+
+      - name: Verify dist is up-to-date
+        run: |
+          bun run build
+          if [ -n "$(git diff --name-only dist/)" ]; then
+            echo "❌ dist/ is out of date — run 'npx tsc' and commit dist/"
+            git diff --stat dist/
+            exit 1
+          fi
+          echo "✅ dist/ is up-to-date"
