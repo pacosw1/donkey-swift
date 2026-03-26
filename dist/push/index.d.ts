@@ -148,6 +148,7 @@ export declare class APNsProvider implements PushProvider {
     private baseUrl;
     private cachedToken;
     private tokenExpiry;
+    private _tokenPromise;
     private _h2client;
     private _connectingPromise;
     private onBadToken?;
@@ -159,7 +160,7 @@ export declare class APNsProvider implements PushProvider {
     send(deviceToken: string, title: string, body: string): Promise<void>;
     sendWithData(deviceToken: string, title: string, body: string, data: Record<string, string>): Promise<void>;
     sendSilent(deviceToken: string, data: Record<string, string>): Promise<void>;
-    sendRich(deviceToken: string, payload: APNsPayload, headers?: APNsHeaders): Promise<PushResult>;
+    sendRich(deviceToken: string, payload: APNsPayload, headers?: APNsHeaders, _retry?: boolean): Promise<PushResult>;
     /** Get or create H2 client, deduplicated across concurrent callers. */
     private getH2Client;
 }

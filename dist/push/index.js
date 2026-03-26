@@ -98,6 +98,7 @@ export class APNsProvider {
     baseUrl;
     cachedToken = null;
     tokenExpiry = 0;
+    _tokenPromise = null;
     _h2client = null;
     _connectingPromise = null;
     onBadToken;
@@ -119,18 +120,25 @@ export class APNsProvider {
         const key = await jose.importPKCS8(keyData, "ES256");
         return new APNsProvider(key, cfg);
     }
-    async getToken() {
+    getToken() {
         if (this.cachedToken && Date.now() < this.tokenExpiry) {
-            return this.cachedToken;
+            return Promise.resolve(this.cachedToken);
         }
-        const token = await new jose.SignJWT({})
-            .setProtectedHeader({ alg: "ES256", kid: this.keyId })
-            .setIssuer(this.teamId)
-            .setIssuedAt()
-            .sign(this.key);
-        this.cachedToken = token;
-        this.tokenExpiry = Date.now() + 50 * 60 * 1000; // 50 min
-        return token;
+        // Deduplicate concurrent token refreshes — only one signs at a time
+        if (this._tokenPromise)
+            return this._tokenPromise;
+        this._tokenPromise = (async () => {
+            const token = await new jose.SignJWT({})
+                .setProtectedHeader({ alg: "ES256", kid: this.keyId })
+                .setIssuer(this.teamId)
+                .setIssuedAt()
+                .sign(this.key);
+            this.cachedToken = token;
+            this.tokenExpiry = Date.now() + 50 * 60 * 1000; // 50 min
+            this._tokenPromise = null;
+            return token;
+        })();
+        return this._tokenPromise;
     }
     /** Close the HTTP/2 connection. Call on shutdown. */
     close() {
@@ -158,13 +166,13 @@ export class APNsProvider {
         if (!result.success)
             throw new Error(`apns error ${result.statusCode}: ${result.reason}`);
     }
-    async sendRich(deviceToken, payload, headers) {
+    async sendRich(deviceToken, payload, headers, _retry = false) {
         const pushType = headers?.pushType ?? (payload.aps["content-available"] ? "background" : "alert");
         const priority = headers?.priority ?? (pushType === "background" ? "5" : "10");
         const token = await this.getToken();
         const client = await this.getH2Client();
         const body = JSON.stringify(payload);
-        return new Promise((resolve, reject) => {
+        const result = await new Promise((resolve, reject) => {
             const req = client.request({
                 [http2.constants.HTTP2_HEADER_METHOD]: "POST",
                 [http2.constants.HTTP2_HEADER_PATH]: `/3/device/${deviceToken}`,
@@ -208,6 +216,13 @@ export class APNsProvider {
             });
             req.end(body);
         });
+        // On 429 TooManyProviderTokenUpdates, back off and retry with the SAME token
+        // (don't invalidate — the issue is too many token switches, not a bad token)
+        if (result.statusCode === 429 && result.reason === "TooManyProviderTokenUpdates" && !_retry) {
+            await new Promise((r) => setTimeout(r, 5000));
+            return this.sendRich(deviceToken, payload, headers, true);
+        }
+        return result;
     }
     /** Get or create H2 client, deduplicated across concurrent callers. */
     getH2Client() {
