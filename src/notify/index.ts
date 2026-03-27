@@ -13,7 +13,8 @@ export interface NotifyDB {
   upsertNotificationPreferences(prefs: NotificationPreferences): Promise<void>;
   allUsersWithNotificationsEnabled(): Promise<string[]>;
   lastNotificationDelivery(userId: string): Promise<NotificationDelivery | null>;
-  recordNotificationDelivery(userId: string, kind: string, title: string, body: string): Promise<void>;
+  /** Record a notification delivery and return the generated notification ID. */
+  recordNotificationDelivery(userId: string, kind: string, title: string, body: string): Promise<string>;
   trackNotificationOpened(userId: string, notificationId: string): Promise<void>;
 }
 
@@ -166,8 +167,45 @@ export class NotifyService {
     return prefs;
   }
 
-  async trackOpened(userId: string, notificationId?: string): Promise<void> {
-    await this.db.trackNotificationOpened(userId, notificationId ?? "").catch(() => {});
+  /**
+   * Record a notification delivery, then send a push to all enabled devices
+   * with the `notification_id` embedded in the payload so the client can
+   * POST it back for tap tracking.
+   */
+  async sendNotification(
+    userId: string,
+    kind: string,
+    title: string,
+    body: string,
+    extraData?: Record<string, string>
+  ): Promise<{ notificationId: string }> {
+    const notificationId = await this.db.recordNotificationDelivery(userId, kind, title, body);
+
+    const tokens = await this.db.enabledDeviceTokens(userId).catch(() => [] as DeviceToken[]);
+    const data: Record<string, string> = { notification_id: notificationId, type: kind, ...extraData };
+
+    for (const token of tokens) {
+      try {
+        if (this.push.sendRich && token.apns_topic) {
+          await this.push.sendRich(
+            token.token,
+            { aps: { alert: { title, body }, sound: "default" }, ...data },
+            { topic: token.apns_topic }
+          );
+        } else {
+          await this.push.sendWithData(token.token, title, body, data);
+        }
+      } catch (err) {
+        console.log(`[notify] push failed for ${userId}: ${err}`);
+      }
+    }
+
+    return { notificationId };
+  }
+
+  async trackOpened(userId: string, notificationId: string): Promise<void> {
+    if (!notificationId) throw new ValidationError("notification_id is required");
+    await this.db.trackNotificationOpened(userId, notificationId);
   }
 }
 
@@ -293,8 +331,9 @@ export function getHourInTimezone(date: Date, timezone: string): number {
 }
 
 /**
- * Example tick function. Replace with your app-specific notification logic.
- * Uses sendRich when available to pass per-device APNs topic (for watchOS support).
+ * Example tick function. For tap tracking, prefer using NotifyService.sendNotification()
+ * in your own tick — it records the delivery and includes `notification_id` in the
+ * push payload so the client can POST it back via trackOpened().
  */
 export async function exampleTick(
   userId: string,

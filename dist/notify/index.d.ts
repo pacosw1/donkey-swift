@@ -8,7 +8,8 @@ export interface NotifyDB {
     upsertNotificationPreferences(prefs: NotificationPreferences): Promise<void>;
     allUsersWithNotificationsEnabled(): Promise<string[]>;
     lastNotificationDelivery(userId: string): Promise<NotificationDelivery | null>;
-    recordNotificationDelivery(userId: string, kind: string, title: string, body: string): Promise<void>;
+    /** Record a notification delivery and return the generated notification ID. */
+    recordNotificationDelivery(userId: string, kind: string, title: string, body: string): Promise<string>;
     trackNotificationOpened(userId: string, notificationId: string): Promise<void>;
 }
 export interface DeviceToken {
@@ -68,7 +69,15 @@ export declare class NotifyService {
         timezone: string;
         stop_after_goal: boolean;
     }>): Promise<NotificationPreferences>;
-    trackOpened(userId: string, notificationId?: string): Promise<void>;
+    /**
+     * Record a notification delivery, then send a push to all enabled devices
+     * with the `notification_id` embedded in the payload so the client can
+     * POST it back for tap tracking.
+     */
+    sendNotification(userId: string, kind: string, title: string, body: string, extraData?: Record<string, string>): Promise<{
+        notificationId: string;
+    }>;
+    trackOpened(userId: string, notificationId: string): Promise<void>;
 }
 export type TickFunc = (userId: string, prefs: NotificationPreferences, tokens: DeviceToken[], push: PushProvider) => Promise<void>;
 /** Checks whether a user has completed their daily goal. Used by stop_after_goal. */
@@ -100,8 +109,9 @@ export declare class NotifyScheduler {
 /** Get the current hour (0-23) in a timezone. Handles midnight correctly. */
 export declare function getHourInTimezone(date: Date, timezone: string): number;
 /**
- * Example tick function. Replace with your app-specific notification logic.
- * Uses sendRich when available to pass per-device APNs topic (for watchOS support).
+ * Example tick function. For tap tracking, prefer using NotifyService.sendNotification()
+ * in your own tick — it records the delivery and includes `notification_id` in the
+ * push payload so the client can POST it back via trackOpened().
  */
 export declare function exampleTick(userId: string, _prefs: NotificationPreferences, tokens: DeviceToken[], push: PushProvider): Promise<void>;
 //# sourceMappingURL=index.d.ts.map

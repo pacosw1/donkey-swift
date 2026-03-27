@@ -236,20 +236,18 @@ describe("NotifyService", () => {
       expect(db.trackNotificationOpened).toHaveBeenCalledWith("user-1", "notif-123");
     });
 
-    it("uses empty string when notificationId is undefined", async () => {
+    it("throws ValidationError when notificationId is empty", async () => {
       const db = mockNotifyDB();
       const svc = new NotifyService(db, mockPush());
-      await svc.trackOpened("user-1");
-      expect(db.trackNotificationOpened).toHaveBeenCalledWith("user-1", "");
+      await expect(svc.trackOpened("user-1", "")).rejects.toThrow(ValidationError);
     });
 
-    it("does not throw when DB fails", async () => {
+    it("propagates DB errors", async () => {
       const db = mockNotifyDB({
         trackNotificationOpened: vi.fn().mockRejectedValue(new Error("db down")),
       });
       const svc = new NotifyService(db, mockPush());
-      // trackOpened uses .catch(() => {}), so it should not throw
-      await expect(svc.trackOpened("user-1", "notif-123")).resolves.toBeUndefined();
+      await expect(svc.trackOpened("user-1", "notif-123")).rejects.toThrow("db down");
     });
   });
 });

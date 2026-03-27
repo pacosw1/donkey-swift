@@ -352,7 +352,7 @@ interface NotifyDB {
   upsertNotificationPreferences(prefs: NotificationPreferences): Promise<void>;
   allUsersWithNotificationsEnabled(): Promise<string[]>;
   lastNotificationDelivery(userId: string): Promise<NotificationDelivery | null>;
-  recordNotificationDelivery(userId: string, kind: string, title: string, body: string): Promise<void>;
+  recordNotificationDelivery(userId: string, kind: string, title: string, body: string): Promise<string>;
   trackNotificationOpened(userId: string, notificationId: string): Promise<void>;
 }
 ```
@@ -416,7 +416,8 @@ class NotifyService {
   async disableDevice(userId: string, token: string): Promise<{ status: string }>
   async getPreferences(userId: string): Promise<NotificationPreferences>
   async updatePreferences(userId: string, input: Partial<{ push_enabled: boolean; interval_seconds: number; wake_hour: number; sleep_hour: number; timezone: string; stop_after_goal: boolean }>): Promise<NotificationPreferences>
-  async trackOpened(userId: string, notificationId?: string): Promise<void>
+  async sendNotification(userId: string, kind: string, title: string, body: string, extraData?: Record<string, string>): Promise<{ notificationId: string }>
+  async trackOpened(userId: string, notificationId: string): Promise<void>
 }
 
 class NotifyScheduler {

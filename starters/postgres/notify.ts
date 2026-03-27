@@ -152,14 +152,16 @@ export function withNotifyDB(db: DrizzleDB): NotifyDB {
       };
     },
 
-    async recordNotificationDelivery(userId: string, kind: string, title: string, body: string): Promise<void> {
+    async recordNotificationDelivery(userId: string, kind: string, title: string, body: string): Promise<string> {
+      const id = randomUUID();
       await db.insert(notificationDeliveries).values({
-        id: randomUUID(),
+        id,
         userId,
         kind,
         title,
         body,
       });
+      return id;
     },
 
     async trackNotificationOpened(userId: string, notificationId: string): Promise<void> {
