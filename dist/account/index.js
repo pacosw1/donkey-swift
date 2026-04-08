@@ -5,15 +5,26 @@ export class AccountService {
     db;
     appCleanup;
     appExport;
+    identityRevoker;
     constructor(cfg, db, opts) {
         this.cfg = cfg;
         this.db = db;
         this.appCleanup = opts?.cleanup;
         this.appExport = opts?.exporter;
+        this.identityRevoker = opts?.revoker;
     }
     /** Delete a user account and all associated data. */
     async deleteAccount(userId) {
         const email = await this.db.getUserEmail(userId).catch(() => "");
+        let identityRevocation;
+        if (this.identityRevoker) {
+            try {
+                identityRevocation = await this.identityRevoker.revokeIdentity(userId);
+            }
+            catch {
+                throw new ServiceError("INTERNAL", "failed to revoke account identity");
+            }
+        }
         const deleteAll = async () => {
             // 1. App-specific tables first
             if (this.appCleanup) {
@@ -38,7 +49,7 @@ export class AccountService {
         // Callback (outside transaction — fire and forget)
         if (this.cfg.onDelete && email)
             this.cfg.onDelete(userId, email);
-        return { status: "deleted" };
+        return { status: "deleted", identityRevocation };
     }
     /** Anonymize a user account (remove PII but keep the record). */
     async anonymizeAccount(userId) {

@@ -20,6 +20,9 @@ function mockDB(overrides: Partial<AuthDB> = {}): AuthDB {
   return {
     upsertUserByAppleSub: vi.fn().mockResolvedValue(makeUser()),
     userById: vi.fn().mockResolvedValue(makeUser()),
+    storeAppleAuthArtifacts: vi.fn().mockResolvedValue(undefined),
+    getAppleAuthArtifacts: vi.fn().mockResolvedValue(null),
+    deleteAppleAuthArtifacts: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -54,6 +57,25 @@ describe("AuthService.authenticateWithApple", () => {
     const { svc } = createService();
     await expect(svc.authenticateWithApple("")).rejects.toThrow(ValidationError);
     await expect(svc.authenticateWithApple("")).rejects.toThrow("identity_token is required");
+  });
+});
+
+describe("AuthService.refreshSession", () => {
+  it("throws when apple token persistence is unavailable", async () => {
+    const { svc } = createService({
+      storeAppleAuthArtifacts: undefined,
+      getAppleAuthArtifacts: undefined,
+    });
+    await expect(svc.refreshSession("user-1")).rejects.toThrow(NotConfiguredError);
+  });
+});
+
+describe("AuthService.parseSessionTokenAllowExpired", () => {
+  it("extracts the user id from an expired but validly signed token", async () => {
+    const { svc } = createService({}, { sessionExpirySec: 1 });
+    const token = await svc.createSessionToken("user-expired");
+    const uid = await svc.parseSessionTokenAllowExpired(token);
+    expect(uid).toBe("user-expired");
   });
 });
 

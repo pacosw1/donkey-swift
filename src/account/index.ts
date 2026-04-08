@@ -24,6 +24,17 @@ export interface AppExporter {
   exportAppData(userId: string): Promise<unknown>;
 }
 
+export interface IdentityRevocationResult {
+  provider: string;
+  attempted: boolean;
+  revoked: boolean;
+  reason?: string;
+}
+
+export interface IdentityRevoker {
+  revokeIdentity(userId: string): Promise<IdentityRevocationResult>;
+}
+
 export interface UserDataExport {
   user: unknown;
   subscription?: unknown;
@@ -46,19 +57,32 @@ export interface AccountConfig {
 export class AccountService {
   private appCleanup?: AppCleanup;
   private appExport?: AppExporter;
+  private identityRevoker?: IdentityRevoker;
 
   constructor(
     private cfg: AccountConfig,
     private db: AccountDB,
-    opts?: { cleanup?: AppCleanup; exporter?: AppExporter }
+    opts?: { cleanup?: AppCleanup; exporter?: AppExporter; revoker?: IdentityRevoker }
   ) {
     this.appCleanup = opts?.cleanup;
     this.appExport = opts?.exporter;
+    this.identityRevoker = opts?.revoker;
   }
 
   /** Delete a user account and all associated data. */
-  async deleteAccount(userId: string): Promise<{ status: string }> {
+  async deleteAccount(
+    userId: string
+  ): Promise<{ status: string; identityRevocation?: IdentityRevocationResult }> {
     const email = await this.db.getUserEmail(userId).catch(() => "");
+    let identityRevocation: IdentityRevocationResult | undefined;
+
+    if (this.identityRevoker) {
+      try {
+        identityRevocation = await this.identityRevoker.revokeIdentity(userId);
+      } catch {
+        throw new ServiceError("INTERNAL", "failed to revoke account identity");
+      }
+    }
 
     const deleteAll = async () => {
       // 1. App-specific tables first
@@ -84,7 +108,7 @@ export class AccountService {
     // Callback (outside transaction — fire and forget)
     if (this.cfg.onDelete && email) this.cfg.onDelete(userId, email);
 
-    return { status: "deleted" };
+    return { status: "deleted", identityRevocation };
   }
 
   /** Anonymize a user account (remove PII but keep the record). */

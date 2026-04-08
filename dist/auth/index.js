@@ -16,6 +16,87 @@ export class AuthService {
         this.secretKey = new TextEncoder().encode(cfg.jwtSecret);
         this.sessionExpirySec = cfg.sessionExpirySec ?? 7 * 24 * 60 * 60;
     }
+    async getAppleClientSecret(clientId, explicitSecret) {
+        if (explicitSecret)
+            return explicitSecret;
+        if (this.cfg.appleClientSecret && clientId === this.cfg.appleWebClientId) {
+            return this.cfg.appleClientSecret;
+        }
+        if (!this.cfg.appleTeamId || !this.cfg.appleKeyId || !this.cfg.applePrivateKey) {
+            throw new NotConfiguredError("apple client secret not configured");
+        }
+        const privateKey = await jose.importPKCS8(this.cfg.applePrivateKey, "ES256");
+        return await new jose.SignJWT({})
+            .setProtectedHeader({ alg: "ES256", kid: this.cfg.appleKeyId })
+            .setIssuer(this.cfg.appleTeamId)
+            .setIssuedAt()
+            .setAudience("https://appleid.apple.com")
+            .setSubject(clientId)
+            .setExpirationTime("180d")
+            .sign(privateKey);
+    }
+    async postAppleTokenForm(body) {
+        const tokenRes = await fetch("https://appleid.apple.com/auth/token", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body,
+        });
+        if (!tokenRes.ok) {
+            const errBody = await tokenRes.text();
+            console.log(`[auth] apple token exchange failed: ${tokenRes.status} ${errBody}`);
+            throw new UnauthorizedError("authorization code exchange failed");
+        }
+        return (await tokenRes.json());
+    }
+    async exchangeAppleAuthorizationCode(code, clientId, explicitSecret, redirectUri) {
+        const clientSecret = await this.getAppleClientSecret(clientId, explicitSecret);
+        const body = new URLSearchParams({
+            client_id: clientId,
+            client_secret: clientSecret,
+            code,
+            grant_type: "authorization_code",
+        });
+        if (redirectUri)
+            body.set("redirect_uri", redirectUri);
+        return await this.postAppleTokenForm(body);
+    }
+    async refreshAppleAuthorization(refreshToken, clientId, explicitSecret) {
+        const clientSecret = await this.getAppleClientSecret(clientId, explicitSecret);
+        return await this.postAppleTokenForm(new URLSearchParams({
+            client_id: clientId,
+            client_secret: clientSecret,
+            refresh_token: refreshToken,
+            grant_type: "refresh_token",
+        }));
+    }
+    async revokeAppleToken(token, clientId, explicitSecret, tokenTypeHint = "refresh_token") {
+        const clientSecret = await this.getAppleClientSecret(clientId, explicitSecret);
+        const res = await fetch("https://appleid.apple.com/auth/revoke", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+                client_id: clientId,
+                client_secret: clientSecret,
+                token,
+                token_type_hint: tokenTypeHint,
+            }),
+        });
+        if (!res.ok) {
+            const errBody = await res.text();
+            console.log(`[auth] apple token revoke failed: ${res.status} ${errBody}`);
+            throw new UnauthorizedError("token revocation failed");
+        }
+    }
+    async parseSessionTokenAllowExpired(tokenStr) {
+        const { payload } = await jose.compactVerify(tokenStr, this.secretKey, {
+            algorithms: ["HS256"],
+        });
+        const decoded = JSON.parse(new TextDecoder().decode(payload));
+        const uid = decoded.uid;
+        if (typeof uid !== "string")
+            throw new Error("invalid session token");
+        return uid;
+    }
     // ── Apple ID Token Verification ─────────────────────────────────────────
     async getAppleJWKS() {
         if (this.jwks && Date.now() < this.jwksExpiry)
@@ -94,11 +175,12 @@ export class AuthService {
     }
     // ── Pure Business Methods ─────────────────────────────────────────────
     /** Authenticate via mobile Sign in with Apple (identity token). */
-    async authenticateWithApple(identityToken, name) {
+    async authenticateWithApple(identityToken, name, authorizationCode) {
         if (!identityToken) {
             throw new ValidationError("identity_token is required");
         }
         let sub, email;
+        let exchangedTokens = null;
         try {
             ({ sub, email } = await this.verifyAppleIdToken(identityToken));
         }
@@ -106,12 +188,38 @@ export class AuthService {
             console.log(`[auth] apple token verification failed: ${err}`);
             throw new UnauthorizedError("token verification failed");
         }
+        if (authorizationCode && this.db.storeAppleAuthArtifacts) {
+            try {
+                exchangedTokens = await this.exchangeAppleAuthorizationCode(authorizationCode, this.cfg.appleBundleId, this.cfg.appleBundleClientSecret);
+            }
+            catch (err) {
+                if (err instanceof UnauthorizedError || err instanceof NotConfiguredError)
+                    throw err;
+                console.log(`[auth] native apple code exchange error: ${err}`);
+                throw new ServiceError("INTERNAL", "token exchange failed");
+            }
+        }
         let user;
         try {
             user = await this.db.upsertUserByAppleSub(randomUUID(), sub, email, name ?? "");
         }
         catch {
             throw new ServiceError("INTERNAL", "failed to create user");
+        }
+        if (this.db.storeAppleAuthArtifacts && exchangedTokens) {
+            await this.db.storeAppleAuthArtifacts(user.id, {
+                refreshToken: exchangedTokens.refresh_token ?? null,
+                accessToken: exchangedTokens.access_token ?? null,
+                idToken: exchangedTokens.id_token ?? identityToken,
+                authorizationCode,
+                tokenType: exchangedTokens.token_type ?? null,
+                scope: exchangedTokens.scope ?? null,
+                accessTokenExpiresAt: exchangedTokens.expires_in
+                    ? new Date(Date.now() + exchangedTokens.expires_in * 1000)
+                    : null,
+                refreshTokenIssuedAt: exchangedTokens.refresh_token ? new Date() : null,
+                updatedAt: new Date(),
+            });
         }
         const token = await this.createSessionToken(user.id);
         return { token, user };
@@ -121,47 +229,32 @@ export class AuthService {
      * Requires appleClientSecret and appleRedirectUri in config.
      */
     async authenticateWithWeb(code, name) {
-        if (!this.cfg.appleClientSecret || !this.cfg.appleRedirectUri || !this.cfg.appleWebClientId) {
+        if (!this.cfg.appleRedirectUri || !this.cfg.appleWebClientId) {
             throw new NotConfiguredError("web auth not configured");
         }
         if (!code) {
             throw new ValidationError("authorization code is required");
         }
         // Exchange authorization code for tokens
-        let idToken;
+        let tokenData;
         try {
-            const tokenRes = await fetch("https://appleid.apple.com/auth/token", {
-                method: "POST",
-                headers: { "Content-Type": "application/x-www-form-urlencoded" },
-                body: new URLSearchParams({
-                    client_id: this.cfg.appleWebClientId,
-                    client_secret: this.cfg.appleClientSecret,
-                    code,
-                    grant_type: "authorization_code",
-                    redirect_uri: this.cfg.appleRedirectUri,
-                }),
-            });
-            if (!tokenRes.ok) {
-                const errBody = await tokenRes.text();
-                console.log(`[auth] apple token exchange failed: ${tokenRes.status} ${errBody}`);
-                throw new UnauthorizedError("authorization code exchange failed");
-            }
-            const tokenData = (await tokenRes.json());
+            tokenData = await this.exchangeAppleAuthorizationCode(code, this.cfg.appleWebClientId, this.cfg.appleWebClientSecret ?? this.cfg.appleClientSecret, this.cfg.appleRedirectUri);
             if (!tokenData.id_token) {
                 throw new UnauthorizedError("no id_token in response");
             }
-            idToken = tokenData.id_token;
         }
         catch (err) {
-            if (err instanceof UnauthorizedError)
+            if (err instanceof UnauthorizedError ||
+                err instanceof NotConfiguredError) {
                 throw err;
+            }
             console.log(`[auth] apple token exchange error: ${err}`);
             throw new ServiceError("INTERNAL", "token exchange failed");
         }
         // Verify the id_token
         let sub, email;
         try {
-            ({ sub, email } = await this.verifyAppleIdToken(idToken));
+            ({ sub, email } = await this.verifyAppleIdToken(tokenData.id_token));
         }
         catch (err) {
             console.log(`[auth] web id_token verification failed: ${err}`);
@@ -174,8 +267,89 @@ export class AuthService {
         catch {
             throw new ServiceError("INTERNAL", "failed to create user");
         }
+        if (this.db.storeAppleAuthArtifacts) {
+            await this.db.storeAppleAuthArtifacts(user.id, {
+                refreshToken: tokenData.refresh_token ?? null,
+                accessToken: tokenData.access_token ?? null,
+                idToken: tokenData.id_token ?? null,
+                authorizationCode: code,
+                tokenType: tokenData.token_type ?? null,
+                scope: tokenData.scope ?? null,
+                accessTokenExpiresAt: tokenData.expires_in
+                    ? new Date(Date.now() + tokenData.expires_in * 1000)
+                    : null,
+                refreshTokenIssuedAt: tokenData.refresh_token ? new Date() : null,
+                updatedAt: new Date(),
+            });
+        }
         const token = await this.createSessionToken(user.id);
         return { token, user };
+    }
+    async refreshSession(userId) {
+        if (!this.db.getAppleAuthArtifacts || !this.db.storeAppleAuthArtifacts) {
+            throw new NotConfiguredError("apple token persistence not configured");
+        }
+        const existing = await this.db.getAppleAuthArtifacts(userId);
+        if (!existing?.refreshToken) {
+            throw new UnauthorizedError("no refresh token available");
+        }
+        let tokenData;
+        try {
+            tokenData = await this.refreshAppleAuthorization(existing.refreshToken, this.cfg.appleBundleId, this.cfg.appleBundleClientSecret);
+        }
+        catch (err) {
+            if (err instanceof UnauthorizedError || err instanceof NotConfiguredError)
+                throw err;
+            console.log(`[auth] apple refresh error: ${err}`);
+            throw new ServiceError("INTERNAL", "token refresh failed");
+        }
+        if (!tokenData.id_token) {
+            throw new UnauthorizedError("no id_token in refresh response");
+        }
+        const claims = await this.verifyAppleIdToken(tokenData.id_token);
+        const user = await this.getUser(userId);
+        if (claims.sub !== user.apple_sub) {
+            throw new UnauthorizedError("apple subject mismatch");
+        }
+        await this.db.storeAppleAuthArtifacts(userId, {
+            refreshToken: tokenData.refresh_token ?? existing.refreshToken,
+            accessToken: tokenData.access_token ?? null,
+            idToken: tokenData.id_token,
+            tokenType: tokenData.token_type ?? null,
+            scope: tokenData.scope ?? null,
+            accessTokenExpiresAt: tokenData.expires_in
+                ? new Date(Date.now() + tokenData.expires_in * 1000)
+                : null,
+            refreshTokenIssuedAt: tokenData.refresh_token ? new Date() : existing.refreshTokenIssuedAt ?? null,
+            updatedAt: new Date(),
+        });
+        const token = await this.createSessionToken(user.id);
+        return { token, user };
+    }
+    async revokeAppleTokens(userId) {
+        if (!this.db.getAppleAuthArtifacts) {
+            return { revoked: false, reason: "apple token persistence not configured" };
+        }
+        const existing = await this.db.getAppleAuthArtifacts(userId);
+        if (!existing?.refreshToken && !existing?.accessToken) {
+            return { revoked: false, reason: "no apple token available" };
+        }
+        try {
+            if (existing.refreshToken) {
+                await this.revokeAppleToken(existing.refreshToken, this.cfg.appleBundleId, this.cfg.appleBundleClientSecret, "refresh_token");
+            }
+            else if (existing.accessToken) {
+                await this.revokeAppleToken(existing.accessToken, this.cfg.appleBundleId, this.cfg.appleBundleClientSecret, "access_token");
+            }
+        }
+        catch (err) {
+            if (err instanceof NotConfiguredError) {
+                return { revoked: false, reason: "apple client secret not configured" };
+            }
+            throw err;
+        }
+        await this.db.deleteAppleAuthArtifacts?.(userId);
+        return { revoked: true };
     }
     /** Get the current user by ID. */
     async getUser(userId) {

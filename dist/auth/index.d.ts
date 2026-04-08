@@ -1,6 +1,9 @@
 export interface AuthDB {
     upsertUserByAppleSub(id: string, appleSub: string, email: string, name: string): Promise<User>;
     userById(id: string): Promise<User>;
+    storeAppleAuthArtifacts?(userId: string, artifacts: AppleAuthArtifacts): Promise<void>;
+    getAppleAuthArtifacts?(userId: string): Promise<AppleAuthArtifacts | null>;
+    deleteAppleAuthArtifacts?(userId: string): Promise<void>;
 }
 /**
  * Optional server-side session store. Enables session revocation and multi-device management.
@@ -33,6 +36,11 @@ export interface AuthConfig {
     jwtSecret: string;
     appleBundleId: string;
     appleWebClientId?: string;
+    appleBundleClientSecret?: string;
+    appleWebClientSecret?: string;
+    appleTeamId?: string;
+    appleKeyId?: string;
+    applePrivateKey?: string;
     /** Session expiry in seconds (default: 7 days). */
     sessionExpirySec?: number;
     productionEnv?: boolean;
@@ -47,6 +55,17 @@ export interface AuthConfig {
     /** Redirect URI for Sign in with Apple web flow. */
     appleRedirectUri?: string;
 }
+export interface AppleAuthArtifacts {
+    refreshToken: string | null;
+    accessToken?: string | null;
+    idToken?: string | null;
+    authorizationCode?: string | null;
+    tokenType?: string | null;
+    scope?: string | null;
+    accessTokenExpiresAt?: Date | string | null;
+    refreshTokenIssuedAt?: Date | string | null;
+    updatedAt?: Date | string | null;
+}
 export declare class AuthService {
     private cfg;
     private db;
@@ -56,6 +75,12 @@ export declare class AuthService {
     private jwksExpiry;
     private jwksFetchPromise;
     constructor(cfg: AuthConfig, db: AuthDB);
+    private getAppleClientSecret;
+    private postAppleTokenForm;
+    private exchangeAppleAuthorizationCode;
+    private refreshAppleAuthorization;
+    private revokeAppleToken;
+    parseSessionTokenAllowExpired(tokenStr: string): Promise<string>;
     private getAppleJWKS;
     verifyAppleIdToken(tokenString: string): Promise<{
         sub: string;
@@ -65,7 +90,7 @@ export declare class AuthService {
     createSessionToken(userId: string): Promise<string>;
     parseSessionToken(tokenStr: string): Promise<string>;
     /** Authenticate via mobile Sign in with Apple (identity token). */
-    authenticateWithApple(identityToken: string, name?: string): Promise<{
+    authenticateWithApple(identityToken: string, name?: string, authorizationCode?: string): Promise<{
         token: string;
         user: User;
     }>;
@@ -76,6 +101,14 @@ export declare class AuthService {
     authenticateWithWeb(code: string, name?: string): Promise<{
         token: string;
         user: User;
+    }>;
+    refreshSession(userId: string): Promise<{
+        token: string;
+        user: User;
+    }>;
+    revokeAppleTokens(userId: string): Promise<{
+        revoked: boolean;
+        reason?: string;
     }>;
     /** Get the current user by ID. */
     getUser(userId: string): Promise<User>;

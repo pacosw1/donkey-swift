@@ -1,5 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
-import { AccountService, type AccountDB, type AccountConfig, type AppCleanup, type AppExporter, type UserDataExport } from "../account/index.js";
+import {
+  AccountService,
+  type AccountDB,
+  type AccountConfig,
+  type AppCleanup,
+  type AppExporter,
+  type IdentityRevoker,
+  type UserDataExport,
+} from "../account/index.js";
 import { ServiceError } from "../errors/index.js";
 
 function mockDB(overrides: Partial<AccountDB> = {}): AccountDB {
@@ -16,7 +24,7 @@ function mockDB(overrides: Partial<AccountDB> = {}): AccountDB {
 function createService(
   dbOverrides: Partial<AccountDB> = {},
   cfg: AccountConfig = {},
-  opts?: { cleanup?: AppCleanup; exporter?: AppExporter }
+  opts?: { cleanup?: AppCleanup; exporter?: AppExporter; revoker?: IdentityRevoker }
 ) {
   const db = mockDB(dbOverrides);
   const svc = new AccountService(cfg, db, opts);
@@ -59,6 +67,25 @@ describe("AccountService", () => {
       expect(onDelete).toHaveBeenCalledWith("user-1", "user@example.com");
     });
 
+    it("revokes external identity before deletion when configured", async () => {
+      const revoker: IdentityRevoker = {
+        revokeIdentity: vi.fn().mockResolvedValue({
+          provider: "apple",
+          attempted: true,
+          revoked: true,
+        }),
+      };
+      const { svc } = createService({}, {}, { revoker });
+
+      const result = await svc.deleteAccount("user-1");
+      expect(result.identityRevocation).toEqual({
+        provider: "apple",
+        attempted: true,
+        revoked: true,
+      });
+      expect(revoker.revokeIdentity).toHaveBeenCalledWith("user-1");
+    });
+
     it("throws ServiceError if deletion fails", async () => {
       const { svc } = createService({
         deleteUserData: vi.fn().mockRejectedValue(new Error("db down")),
@@ -66,6 +93,16 @@ describe("AccountService", () => {
 
       await expect(svc.deleteAccount("user-1")).rejects.toThrow(ServiceError);
       await expect(svc.deleteAccount("user-1")).rejects.toThrow("failed to delete account");
+    });
+
+    it("throws ServiceError if identity revocation fails", async () => {
+      const revoker: IdentityRevoker = {
+        revokeIdentity: vi.fn().mockRejectedValue(new Error("apple down")),
+      };
+      const { svc } = createService({}, {}, { revoker });
+
+      await expect(svc.deleteAccount("user-1")).rejects.toThrow(ServiceError);
+      await expect(svc.deleteAccount("user-1")).rejects.toThrow("failed to revoke account identity");
     });
   });
 

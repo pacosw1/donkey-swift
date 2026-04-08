@@ -17,6 +17,15 @@ export interface AppCleanup {
 export interface AppExporter {
     exportAppData(userId: string): Promise<unknown>;
 }
+export interface IdentityRevocationResult {
+    provider: string;
+    attempted: boolean;
+    revoked: boolean;
+    reason?: string;
+}
+export interface IdentityRevoker {
+    revokeIdentity(userId: string): Promise<IdentityRevocationResult>;
+}
 export interface UserDataExport {
     user: unknown;
     subscription?: unknown;
@@ -37,13 +46,16 @@ export declare class AccountService {
     private db;
     private appCleanup?;
     private appExport?;
+    private identityRevoker?;
     constructor(cfg: AccountConfig, db: AccountDB, opts?: {
         cleanup?: AppCleanup;
         exporter?: AppExporter;
+        revoker?: IdentityRevoker;
     });
     /** Delete a user account and all associated data. */
     deleteAccount(userId: string): Promise<{
         status: string;
+        identityRevocation?: IdentityRevocationResult;
     }>;
     /** Anonymize a user account (remove PII but keep the record). */
     anonymizeAccount(userId: string): Promise<{
