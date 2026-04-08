@@ -53,6 +53,7 @@ const { token, user } = await auth.authenticateWithApple(identityToken);
 | `lifecycle` | User lifecycle stages, engagement scoring, contextual prompts |
 | `analytics` | Admin dashboards (DAU, MRR, retention, revenue, events) |
 | `appstore` | App Store Server API v2 client (transaction history, subscription mgmt) |
+| `attribution` | Campaign/source/channel attribution with tracked links, clicks, and conversions |
 | `promo` | Influencer promo codes, redemption tracking, commission calculation |
 | `grants` | Manual premium grants with expiry and revocation |
 | `conversion` | Discount offers for converting free users, with dismissal tracking |
