@@ -1,5 +1,5 @@
 import * as jose from "jose";
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   ValidationError,
   NotFoundError,
@@ -38,6 +38,32 @@ export interface SessionDB {
   revokeAllSessions(userId: string): Promise<void>;
   /** List active sessions for a user (for multi-device visibility). */
   activeSessions?(userId: string): Promise<Array<{ jti: string; createdAt: Date | string }>>;
+  /** Persist a long-lived refresh session using a hashed token identifier. */
+  createRefreshSession?(record: RefreshSessionRecord): Promise<void>;
+  /** Look up an active refresh session by hashed token identifier. */
+  getRefreshSessionByTokenHash?(tokenHash: string): Promise<RefreshSessionRecord | null>;
+  /** Rotate a refresh session atomically. */
+  rotateRefreshSession?(
+    currentTokenHash: string,
+    nextRecord: RefreshSessionRecord
+  ): Promise<RefreshSessionRecord | null>;
+  /** Revoke a single refresh session. */
+  revokeRefreshSession?(tokenHash: string, revokedAt: Date): Promise<void>;
+  /** Revoke all refresh sessions for a user. */
+  revokeAllRefreshSessions?(userId: string, revokedAt: Date): Promise<void>;
+}
+
+export interface RefreshSessionRecord {
+  id: string;
+  userId: string;
+  tokenHash: string;
+  sessionJti: string;
+  createdAt: Date | string;
+  expiresAt: Date | string;
+  rotatedAt?: Date | string | null;
+  revokedAt?: Date | string | null;
+  installationId?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface User {
@@ -58,8 +84,10 @@ export interface AuthConfig {
   appleTeamId?: string;
   appleKeyId?: string;
   applePrivateKey?: string;
-  /** Session expiry in seconds (default: 7 days). */
+  /** Access token expiry in seconds (default: 1 day). */
   sessionExpirySec?: number;
+  /** Refresh token expiry in seconds (default: 90 days). */
+  refreshTokenExpirySec?: number;
   productionEnv?: boolean;
   /** Optional server-side session store for revocation support. */
   sessionDB?: SessionDB;
@@ -71,6 +99,18 @@ export interface AuthConfig {
   appleClientSecret?: string;
   /** Redirect URI for Sign in with Apple web flow. */
   appleRedirectUri?: string;
+}
+
+export interface SessionIssueOptions {
+  installationId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AuthSessionResult {
+  token: string;
+  accessToken: string;
+  refreshToken: string | null;
+  user: User;
 }
 
 export interface AppleAuthArtifacts {
@@ -99,6 +139,7 @@ interface AppleTokenResponse {
 export class AuthService {
   private secretKey: Uint8Array;
   private sessionExpirySec: number;
+  private refreshTokenExpirySec: number;
   private jwks: jose.JSONWebKeySet | null = null;
   private jwksExpiry = 0;
   private jwksFetchPromise: Promise<jose.JSONWebKeySet> | null = null;
@@ -108,7 +149,66 @@ export class AuthService {
     private db: AuthDB
   ) {
     this.secretKey = new TextEncoder().encode(cfg.jwtSecret);
-    this.sessionExpirySec = cfg.sessionExpirySec ?? 7 * 24 * 60 * 60;
+    this.sessionExpirySec = cfg.sessionExpirySec ?? 24 * 60 * 60;
+    this.refreshTokenExpirySec = cfg.refreshTokenExpirySec ?? 90 * 24 * 60 * 60;
+  }
+
+  private hashRefreshToken(refreshToken: string): string {
+    return createHash("sha256")
+      .update(this.cfg.jwtSecret)
+      .update(":")
+      .update(refreshToken)
+      .digest("hex");
+  }
+
+  private requiresRefreshSessions(): SessionDB {
+    if (
+      !this.cfg.sessionDB?.createRefreshSession ||
+      !this.cfg.sessionDB.getRefreshSessionByTokenHash ||
+      !this.cfg.sessionDB.rotateRefreshSession ||
+      !this.cfg.sessionDB.revokeRefreshSession ||
+      !this.cfg.sessionDB.revokeAllRefreshSessions
+    ) {
+      throw new NotConfiguredError("refresh session management not configured");
+    }
+    return this.cfg.sessionDB;
+  }
+
+  private async issueAppSession(
+    user: User,
+    options?: SessionIssueOptions
+  ): Promise<AuthSessionResult> {
+    const accessToken = await this.createSessionToken(user.id);
+    let refreshToken: string | null = null;
+
+    if (this.cfg.sessionDB?.createRefreshSession) {
+      const decoded = jose.decodeJwt(accessToken);
+      const sessionJti = decoded.jti;
+      if (typeof sessionJti !== "string" || !sessionJti) {
+        throw new ServiceError("INTERNAL", "failed to create session");
+      }
+
+      refreshToken = randomBytes(48).toString("base64url");
+      await this.cfg.sessionDB.createRefreshSession({
+        id: randomUUID(),
+        userId: user.id,
+        tokenHash: this.hashRefreshToken(refreshToken),
+        sessionJti,
+        createdAt: new Date(),
+        expiresAt: new Date(Date.now() + this.refreshTokenExpirySec * 1000),
+        rotatedAt: null,
+        revokedAt: null,
+        installationId: options?.installationId ?? null,
+        metadata: options?.metadata ?? null,
+      });
+    }
+
+    return {
+      token: accessToken,
+      accessToken,
+      refreshToken,
+      user,
+    };
   }
 
   private async getAppleClientSecret(clientId: string, explicitSecret?: string): Promise<string> {
@@ -312,8 +412,9 @@ export class AuthService {
   async authenticateWithApple(
     identityToken: string,
     name?: string,
-    authorizationCode?: string
-  ): Promise<{ token: string; user: User }> {
+    authorizationCode?: string,
+    options?: SessionIssueOptions
+  ): Promise<AuthSessionResult> {
     if (!identityToken) {
       throw new ValidationError("identity_token is required");
     }
@@ -369,8 +470,7 @@ export class AuthService {
       });
     }
 
-    const token = await this.createSessionToken(user.id);
-    return { token, user };
+    return await this.issueAppSession(user, options);
   }
 
   /**
@@ -379,8 +479,9 @@ export class AuthService {
    */
   async authenticateWithWeb(
     code: string,
-    name?: string
-  ): Promise<{ token: string; user: User }> {
+    name?: string,
+    options?: SessionIssueOptions
+  ): Promise<AuthSessionResult> {
     if (!this.cfg.appleRedirectUri || !this.cfg.appleWebClientId) {
       throw new NotConfiguredError("web auth not configured");
     }
@@ -444,11 +545,10 @@ export class AuthService {
       });
     }
 
-    const token = await this.createSessionToken(user.id);
-    return { token, user };
+    return await this.issueAppSession(user, options);
   }
 
-  async refreshSession(userId: string): Promise<{ token: string; user: User }> {
+  async refreshSessionFromApple(userId: string): Promise<AuthSessionResult> {
     if (!this.db.getAppleAuthArtifacts || !this.db.storeAppleAuthArtifacts) {
       throw new NotConfiguredError("apple token persistence not configured");
     }
@@ -494,8 +594,59 @@ export class AuthService {
       updatedAt: new Date(),
     });
 
-    const token = await this.createSessionToken(user.id);
-    return { token, user };
+    return await this.issueAppSession(user);
+  }
+
+  async refreshSession(refreshToken: string): Promise<AuthSessionResult> {
+    if (!refreshToken) {
+      throw new ValidationError("refresh_token is required");
+    }
+
+    const sessionDB = this.requiresRefreshSessions();
+    const now = new Date();
+    const tokenHash = this.hashRefreshToken(refreshToken);
+    const existing = await sessionDB.getRefreshSessionByTokenHash!(tokenHash);
+
+    if (!existing || existing.revokedAt || new Date(existing.expiresAt) <= now) {
+      throw new UnauthorizedError("refresh token invalid");
+    }
+
+    const user = await this.getUser(existing.userId);
+    const accessToken = await this.createSessionToken(user.id);
+    const decoded = jose.decodeJwt(accessToken);
+    const sessionJti = decoded.jti;
+    if (typeof sessionJti !== "string" || !sessionJti) {
+      throw new ServiceError("INTERNAL", "failed to create session");
+    }
+
+    const nextRefreshToken = randomBytes(48).toString("base64url");
+    const rotated = await sessionDB.rotateRefreshSession!(tokenHash, {
+      id: randomUUID(),
+      userId: user.id,
+      tokenHash: this.hashRefreshToken(nextRefreshToken),
+      sessionJti,
+      createdAt: now,
+      expiresAt: new Date(now.getTime() + this.refreshTokenExpirySec * 1000),
+      rotatedAt: null,
+      revokedAt: null,
+      installationId: existing.installationId ?? null,
+      metadata: existing.metadata ?? null,
+    });
+
+    if (!rotated) {
+      throw new UnauthorizedError("refresh token invalid");
+    }
+
+    if (existing.sessionJti) {
+      await this.cfg.sessionDB?.revokeSession(existing.sessionJti).catch(() => undefined);
+    }
+
+    return {
+      token: accessToken,
+      accessToken,
+      refreshToken: nextRefreshToken,
+      user,
+    };
   }
 
   async revokeAppleTokens(userId: string): Promise<{ revoked: boolean; reason?: string }> {
@@ -562,6 +713,7 @@ export class AuthService {
       throw new NotConfiguredError("session management not configured");
     }
     await this.cfg.sessionDB.revokeAllSessions(userId);
+    await this.cfg.sessionDB.revokeAllRefreshSessions?.(userId, new Date());
   }
 
   /** List active sessions for a user (multi-device visibility). */
@@ -581,5 +733,13 @@ export class AuthService {
       throw new ValidationError("session id is required");
     }
     await this.cfg.sessionDB.revokeSession(jti);
+  }
+
+  async revokeRefreshSession(refreshToken: string): Promise<void> {
+    if (!refreshToken) {
+      throw new ValidationError("refresh_token is required");
+    }
+    const sessionDB = this.requiresRefreshSessions();
+    await sessionDB.revokeRefreshSession!(this.hashRefreshToken(refreshToken), new Date());
   }
 }

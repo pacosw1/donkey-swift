@@ -23,6 +23,28 @@ export interface SessionDB {
         jti: string;
         createdAt: Date | string;
     }>>;
+    /** Persist a long-lived refresh session using a hashed token identifier. */
+    createRefreshSession?(record: RefreshSessionRecord): Promise<void>;
+    /** Look up an active refresh session by hashed token identifier. */
+    getRefreshSessionByTokenHash?(tokenHash: string): Promise<RefreshSessionRecord | null>;
+    /** Rotate a refresh session atomically. */
+    rotateRefreshSession?(currentTokenHash: string, nextRecord: RefreshSessionRecord): Promise<RefreshSessionRecord | null>;
+    /** Revoke a single refresh session. */
+    revokeRefreshSession?(tokenHash: string, revokedAt: Date): Promise<void>;
+    /** Revoke all refresh sessions for a user. */
+    revokeAllRefreshSessions?(userId: string, revokedAt: Date): Promise<void>;
+}
+export interface RefreshSessionRecord {
+    id: string;
+    userId: string;
+    tokenHash: string;
+    sessionJti: string;
+    createdAt: Date | string;
+    expiresAt: Date | string;
+    rotatedAt?: Date | string | null;
+    revokedAt?: Date | string | null;
+    installationId?: string | null;
+    metadata?: Record<string, unknown> | null;
 }
 export interface User {
     id: string;
@@ -41,8 +63,10 @@ export interface AuthConfig {
     appleTeamId?: string;
     appleKeyId?: string;
     applePrivateKey?: string;
-    /** Session expiry in seconds (default: 7 days). */
+    /** Access token expiry in seconds (default: 1 day). */
     sessionExpirySec?: number;
+    /** Refresh token expiry in seconds (default: 90 days). */
+    refreshTokenExpirySec?: number;
     productionEnv?: boolean;
     /** Optional server-side session store for revocation support. */
     sessionDB?: SessionDB;
@@ -54,6 +78,16 @@ export interface AuthConfig {
     appleClientSecret?: string;
     /** Redirect URI for Sign in with Apple web flow. */
     appleRedirectUri?: string;
+}
+export interface SessionIssueOptions {
+    installationId?: string;
+    metadata?: Record<string, unknown>;
+}
+export interface AuthSessionResult {
+    token: string;
+    accessToken: string;
+    refreshToken: string | null;
+    user: User;
 }
 export interface AppleAuthArtifacts {
     refreshToken: string | null;
@@ -71,10 +105,14 @@ export declare class AuthService {
     private db;
     private secretKey;
     private sessionExpirySec;
+    private refreshTokenExpirySec;
     private jwks;
     private jwksExpiry;
     private jwksFetchPromise;
     constructor(cfg: AuthConfig, db: AuthDB);
+    private hashRefreshToken;
+    private requiresRefreshSessions;
+    private issueAppSession;
     private getAppleClientSecret;
     private postAppleTokenForm;
     private exchangeAppleAuthorizationCode;
@@ -90,22 +128,14 @@ export declare class AuthService {
     createSessionToken(userId: string): Promise<string>;
     parseSessionToken(tokenStr: string): Promise<string>;
     /** Authenticate via mobile Sign in with Apple (identity token). */
-    authenticateWithApple(identityToken: string, name?: string, authorizationCode?: string): Promise<{
-        token: string;
-        user: User;
-    }>;
+    authenticateWithApple(identityToken: string, name?: string, authorizationCode?: string, options?: SessionIssueOptions): Promise<AuthSessionResult>;
     /**
      * Authenticate via Sign in with Apple web OAuth2 code exchange.
      * Requires appleClientSecret and appleRedirectUri in config.
      */
-    authenticateWithWeb(code: string, name?: string): Promise<{
-        token: string;
-        user: User;
-    }>;
-    refreshSession(userId: string): Promise<{
-        token: string;
-        user: User;
-    }>;
+    authenticateWithWeb(code: string, name?: string, options?: SessionIssueOptions): Promise<AuthSessionResult>;
+    refreshSessionFromApple(userId: string): Promise<AuthSessionResult>;
+    refreshSession(refreshToken: string): Promise<AuthSessionResult>;
     revokeAppleTokens(userId: string): Promise<{
         revoked: boolean;
         reason?: string;
@@ -123,5 +153,6 @@ export declare class AuthService {
     }>>;
     /** Revoke a specific session by jti. */
     revokeSession(jti: string): Promise<void>;
+    revokeRefreshSession(refreshToken: string): Promise<void>;
 }
 //# sourceMappingURL=index.d.ts.map

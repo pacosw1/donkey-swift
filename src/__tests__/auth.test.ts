@@ -34,6 +34,11 @@ function mockSessionDB(overrides: Partial<SessionDB> = {}): SessionDB {
     revokeSession: vi.fn().mockResolvedValue(undefined),
     revokeAllSessions: vi.fn().mockResolvedValue(undefined),
     activeSessions: vi.fn().mockResolvedValue([]),
+    createRefreshSession: vi.fn().mockResolvedValue(undefined),
+    getRefreshSessionByTokenHash: vi.fn().mockResolvedValue(null),
+    rotateRefreshSession: vi.fn().mockResolvedValue(null),
+    revokeRefreshSession: vi.fn().mockResolvedValue(undefined),
+    revokeAllRefreshSessions: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -61,12 +66,14 @@ describe("AuthService.authenticateWithApple", () => {
 });
 
 describe("AuthService.refreshSession", () => {
-  it("throws when apple token persistence is unavailable", async () => {
-    const { svc } = createService({
-      storeAppleAuthArtifacts: undefined,
-      getAppleAuthArtifacts: undefined,
-    });
-    await expect(svc.refreshSession("user-1")).rejects.toThrow(NotConfiguredError);
+  it("throws when refresh session management is unavailable", async () => {
+    const { svc } = createService({}, { sessionDB: undefined });
+    await expect(svc.refreshSession("refresh-token")).rejects.toThrow(NotConfiguredError);
+  });
+
+  it("throws for empty refresh token", async () => {
+    const { svc } = createService({}, { sessionDB: mockSessionDB() });
+    await expect(svc.refreshSession("")).rejects.toThrow(ValidationError);
   });
 });
 
@@ -290,5 +297,51 @@ describe("AuthService sessionDB integration", () => {
     const token = await svc.createSessionToken("user-valid");
     const uid = await svc.parseSessionToken(token);
     expect(uid).toBe("user-valid");
+  });
+
+  it("authenticateWithApple returns app refresh token when refresh storage is available", async () => {
+    const sessionDB = mockSessionDB();
+    const { svc } = createService(
+      {
+        upsertUserByAppleSub: vi.fn().mockResolvedValue(makeUser()),
+      },
+      { sessionDB }
+    );
+    vi.spyOn(svc, "verifyAppleIdToken").mockResolvedValue({
+      sub: "apple-sub-001",
+      email: "test@example.com",
+      emailVerified: true,
+    });
+
+    const result = await svc.authenticateWithApple("identity-token", "Test User");
+    expect(result.accessToken).toBeTruthy();
+    expect(result.refreshToken).toBeTruthy();
+    expect(sessionDB.createRefreshSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshSession rotates refresh token", async () => {
+    const sessionDB = mockSessionDB({
+      getRefreshSessionByTokenHash: vi.fn().mockResolvedValue({
+        id: "refresh-1",
+        userId: "user-001",
+        tokenHash: "old-hash",
+        sessionJti: "old-jti",
+        createdAt: new Date("2025-01-01"),
+        expiresAt: new Date(Date.now() + 60_000),
+        rotatedAt: null,
+        revokedAt: null,
+        installationId: "install-1",
+        metadata: null,
+      }),
+      rotateRefreshSession: vi.fn().mockImplementation(async (_current, next) => next),
+    });
+    const { svc } = createService({}, { sessionDB });
+
+    const result = await svc.refreshSession("plain-refresh-token");
+    expect(result.accessToken).toBeTruthy();
+    expect(result.refreshToken).toBeTruthy();
+    expect(sessionDB.getRefreshSessionByTokenHash).toHaveBeenCalledTimes(1);
+    expect(sessionDB.rotateRefreshSession).toHaveBeenCalledTimes(1);
+    expect(sessionDB.revokeSession).toHaveBeenCalledWith("old-jti");
   });
 });
