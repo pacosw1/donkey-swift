@@ -3,11 +3,21 @@ export interface ChatDB {
     /** Returns messages ordered by created_at DESC (newest first). */
     getChatMessages(userId: string, limit: number, offset: number): Promise<ChatMessage[]>;
     getChatMessagesSince(userId: string, sinceId: number): Promise<ChatMessage[]>;
-    sendChatMessage(userId: string, sender: string, message: string, messageType: string): Promise<ChatMessage>;
+    sendChatMessage(userId: string, sender: string, message: string, messageType: string, attachment?: ChatAttachmentInput | null): Promise<ChatMessage>;
     markChatRead(userId: string, reader: string): Promise<void>;
     getUnreadCount(userId: string): Promise<number>;
     adminListChatThreads(limit: number): Promise<ChatThread[]>;
     enabledDeviceTokens(userId: string): Promise<string[]>;
+}
+export interface ChatAttachmentInput {
+    url: string;
+    content_type: string;
+    file_name?: string | null;
+    size_bytes?: number | null;
+}
+export interface ChatAttachment extends ChatAttachmentInput {
+    file_name: string | null;
+    size_bytes: number | null;
 }
 export interface ChatMessage {
     id: number;
@@ -15,6 +25,7 @@ export interface ChatMessage {
     sender: string;
     message: string;
     message_type: string;
+    attachment?: ChatAttachment | null;
     read_at: string | null;
     created_at: Date | string;
 }
@@ -64,7 +75,7 @@ export declare class ChatService {
         messages: ChatMessage[];
         has_more: boolean;
     }>;
-    sendMessage(userId: string, message: string, messageType?: string): Promise<{
+    sendMessage(userId: string, message: string, messageType?: string, attachment?: ChatAttachmentInput | null): Promise<{
         status: string;
         id: number;
         created_at: Date | string;
@@ -79,7 +90,7 @@ export declare class ChatService {
     adminGetMessages(userId: string, limit?: number, offset?: number): Promise<{
         messages: ChatMessage[];
     }>;
-    adminReply(userId: string, message: string, messageType?: string): Promise<{
+    adminReply(userId: string, message: string, messageType?: string, attachment?: ChatAttachmentInput | null): Promise<{
         status: string;
         id: number;
         created_at: Date | string;

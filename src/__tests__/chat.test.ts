@@ -12,6 +12,7 @@ function makeChatMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
     sender: "user",
     message: "hello",
     message_type: "text",
+    attachment: null,
     read_at: null,
     created_at: new Date().toISOString(),
     ...overrides,
@@ -74,7 +75,42 @@ describe("ChatService", () => {
       const result = await svc.sendMessage("user-1", "hi there");
       expect(result.status).toBe("sent");
       expect(result.id).toBe(42);
-      expect(db.sendChatMessage).toHaveBeenCalledWith("user-1", "user", "hi there", "text");
+      expect(db.sendChatMessage).toHaveBeenCalledWith("user-1", "user", "hi there", "text", undefined);
+    });
+
+    it("passes attachment metadata through to the DB", async () => {
+      const sentMsg = makeChatMessage({
+        id: 43,
+        message: "https://cdn.example.com/image.jpg",
+        message_type: "image",
+        attachment: {
+          url: "https://cdn.example.com/image.jpg",
+          content_type: "image/jpeg",
+          file_name: "image.jpg",
+          size_bytes: 1234,
+        },
+      });
+      const db = mockDB({
+        sendChatMessage: vi.fn().mockResolvedValue(sentMsg),
+      });
+      const svc = new ChatService(db, mockPush(), defaultCfg());
+
+      const attachment = {
+        url: "https://cdn.example.com/image.jpg",
+        content_type: "image/jpeg",
+        file_name: "image.jpg",
+        size_bytes: 1234,
+      };
+
+      const result = await svc.sendMessage("user-1", attachment.url, "image", attachment);
+      expect(result.status).toBe("sent");
+      expect(db.sendChatMessage).toHaveBeenCalledWith(
+        "user-1",
+        "user",
+        attachment.url,
+        "image",
+        attachment,
+      );
     });
 
     it("throws ServiceError when DB fails", async () => {
@@ -224,7 +260,7 @@ describe("ChatService", () => {
       const result = await svc.adminReply("user-1", "got it");
       expect(result.status).toBe("sent");
       expect(result.id).toBe(12);
-      expect(db.sendChatMessage).toHaveBeenCalledWith("user-1", "admin", "got it", "text");
+      expect(db.sendChatMessage).toHaveBeenCalledWith("user-1", "admin", "got it", "text", undefined);
     });
   });
 });

@@ -84,14 +84,15 @@ export class ChatService {
         const hasMore = msgs.length > limit;
         return { messages: hasMore ? msgs.slice(0, limit) : msgs, has_more: hasMore };
     }
-    async sendMessage(userId, message, messageType) {
+    async sendMessage(userId, message, messageType, attachment) {
         if (!message)
             throw new ValidationError("message is required");
         if (message.length > 5000)
             throw new ValidationError("message too long (max 5000 chars)");
+        validateAttachment(attachment);
         let msg;
         try {
-            msg = await this.db.sendChatMessage(userId, "user", message, messageType ?? "text");
+            msg = await this.db.sendChatMessage(userId, "user", message, messageType ?? "text", attachment);
         }
         catch {
             throw new ServiceError("INTERNAL", "failed to send message");
@@ -129,16 +130,17 @@ export class ChatService {
         await this.db.markChatRead(userId, "admin").catch(() => { });
         return { messages: msgs };
     }
-    async adminReply(userId, message, messageType) {
+    async adminReply(userId, message, messageType, attachment) {
         if (!userId)
             throw new ValidationError("missing user_id");
         if (!message)
             throw new ValidationError("message is required");
         if (message.length > 5000)
             throw new ValidationError("message too long (max 5000 chars)");
+        validateAttachment(attachment);
         let msg;
         try {
-            msg = await this.db.sendChatMessage(userId, "admin", message, messageType ?? "text");
+            msg = await this.db.sendChatMessage(userId, "admin", message, messageType ?? "text", attachment);
         }
         catch {
             throw new ServiceError("INTERNAL", "failed to send reply");
@@ -169,6 +171,7 @@ export class ChatService {
                 sender: msg.sender,
                 message: msg.message,
                 message_type: msg.message_type,
+                attachment: msg.attachment ?? null,
                 created_at: msg.created_at instanceof Date ? msg.created_at.toISOString() : msg.created_at,
             },
         };
@@ -191,6 +194,20 @@ export class ChatService {
                 console.log(`[chat-push] failed: ${err}`);
             });
         }
+    }
+}
+function validateAttachment(attachment) {
+    if (!attachment) {
+        return;
+    }
+    if (!attachment.url?.trim()) {
+        throw new ValidationError("attachment url is required");
+    }
+    if (!attachment.content_type?.trim()) {
+        throw new ValidationError("attachment content_type is required");
+    }
+    if (attachment.size_bytes !== undefined && attachment.size_bytes !== null && attachment.size_bytes < 0) {
+        throw new ValidationError("attachment size_bytes must be positive");
     }
 }
 //# sourceMappingURL=index.js.map

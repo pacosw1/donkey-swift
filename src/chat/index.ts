@@ -7,11 +7,29 @@ export interface ChatDB {
   /** Returns messages ordered by created_at DESC (newest first). */
   getChatMessages(userId: string, limit: number, offset: number): Promise<ChatMessage[]>;
   getChatMessagesSince(userId: string, sinceId: number): Promise<ChatMessage[]>;
-  sendChatMessage(userId: string, sender: string, message: string, messageType: string): Promise<ChatMessage>;
+  sendChatMessage(
+    userId: string,
+    sender: string,
+    message: string,
+    messageType: string,
+    attachment?: ChatAttachmentInput | null,
+  ): Promise<ChatMessage>;
   markChatRead(userId: string, reader: string): Promise<void>;
   getUnreadCount(userId: string): Promise<number>;
   adminListChatThreads(limit: number): Promise<ChatThread[]>;
   enabledDeviceTokens(userId: string): Promise<string[]>;
+}
+
+export interface ChatAttachmentInput {
+  url: string;
+  content_type: string;
+  file_name?: string | null;
+  size_bytes?: number | null;
+}
+
+export interface ChatAttachment extends ChatAttachmentInput {
+  file_name: string | null;
+  size_bytes: number | null;
 }
 
 export interface ChatMessage {
@@ -20,6 +38,7 @@ export interface ChatMessage {
   sender: string;
   message: string;
   message_type: string;
+  attachment?: ChatAttachment | null;
   read_at: string | null;
   created_at: Date | string;
 }
@@ -142,14 +161,22 @@ export class ChatService {
   async sendMessage(
     userId: string,
     message: string,
-    messageType?: string
+    messageType?: string,
+    attachment?: ChatAttachmentInput | null,
   ): Promise<{ status: string; id: number; created_at: Date | string }> {
     if (!message) throw new ValidationError("message is required");
     if (message.length > 5000) throw new ValidationError("message too long (max 5000 chars)");
+    validateAttachment(attachment);
 
     let msg: ChatMessage;
     try {
-      msg = await this.db.sendChatMessage(userId, "user", message, messageType ?? "text");
+      msg = await this.db.sendChatMessage(
+        userId,
+        "user",
+        message,
+        messageType ?? "text",
+        attachment,
+      );
     } catch {
       throw new ServiceError("INTERNAL", "failed to send message");
     }
@@ -196,15 +223,23 @@ export class ChatService {
   async adminReply(
     userId: string,
     message: string,
-    messageType?: string
+    messageType?: string,
+    attachment?: ChatAttachmentInput | null,
   ): Promise<{ status: string; id: number; created_at: Date | string }> {
     if (!userId) throw new ValidationError("missing user_id");
     if (!message) throw new ValidationError("message is required");
     if (message.length > 5000) throw new ValidationError("message too long (max 5000 chars)");
+    validateAttachment(attachment);
 
     let msg: ChatMessage;
     try {
-      msg = await this.db.sendChatMessage(userId, "admin", message, messageType ?? "text");
+      msg = await this.db.sendChatMessage(
+        userId,
+        "admin",
+        message,
+        messageType ?? "text",
+        attachment,
+      );
     } catch {
       throw new ServiceError("INTERNAL", "failed to send reply");
     }
@@ -240,6 +275,7 @@ export class ChatService {
         sender: msg.sender,
         message: msg.message,
         message_type: msg.message_type,
+        attachment: msg.attachment ?? null,
         created_at: msg.created_at instanceof Date ? msg.created_at.toISOString() : msg.created_at,
       },
     };
@@ -263,5 +299,23 @@ export class ChatService {
         console.log(`[chat-push] failed: ${err}`);
       });
     }
+  }
+}
+
+function validateAttachment(attachment?: ChatAttachmentInput | null): void {
+  if (!attachment) {
+    return;
+  }
+
+  if (!attachment.url?.trim()) {
+    throw new ValidationError("attachment url is required");
+  }
+
+  if (!attachment.content_type?.trim()) {
+    throw new ValidationError("attachment content_type is required");
+  }
+
+  if (attachment.size_bytes !== undefined && attachment.size_bytes !== null && attachment.size_bytes < 0) {
+    throw new ValidationError("attachment size_bytes must be positive");
   }
 }

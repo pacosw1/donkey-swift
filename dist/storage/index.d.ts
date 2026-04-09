@@ -6,6 +6,19 @@ export interface StorageProvider {
         contentType: string;
     }>;
 }
+export interface StoredObjectRef {
+    key: string;
+    contentType: string;
+    sizeBytes: number;
+}
+export interface UploadObjectInput {
+    keyPrefix: string;
+    contentType: string;
+    data: Buffer | Uint8Array;
+    fileName?: string | null;
+    allowedContentTypes?: string[];
+    maxBytes?: number;
+}
 export interface StorageConfig {
     region?: string;
     bucket: string;
@@ -25,6 +38,12 @@ export declare class StorageClient implements StorageProvider {
         contentType: string;
     }>;
 }
+export declare class StorageUploadService {
+    private storage;
+    constructor(storage: StorageProvider);
+    uploadObject(input: UploadObjectInput): Promise<StoredObjectRef>;
+}
+export declare function buildStorageObjectKey(keyPrefix: string, fileName: string | null | undefined, contentType: string): string;
 export declare class NoopStorageProvider implements StorageProvider {
     configured(): boolean;
     put(): Promise<void>;
