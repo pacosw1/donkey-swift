@@ -22,6 +22,12 @@ export class NotifyService {
             throw new ValidationError("os_version too long");
         if (input.app_version && input.app_version.length > 50)
             throw new ValidationError("app_version too long");
+        if (input.apns_environment && !["production", "sandbox"].includes(input.apns_environment)) {
+            throw new ValidationError("apns_environment must be 'production' or 'sandbox'");
+        }
+        if (input.build_channel && input.build_channel.length > 20) {
+            throw new ValidationError("build_channel too long");
+        }
         const dt = {
             id: randomUUID(),
             user_id: userId,
@@ -33,6 +39,8 @@ export class NotifyService {
             enabled: true,
             last_seen_at: new Date(),
             apns_topic: input.apns_topic,
+            apns_environment: input.apns_environment,
+            build_channel: input.build_channel,
         };
         try {
             await this.db.upsertDeviceToken(dt);

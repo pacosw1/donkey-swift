@@ -3,10 +3,10 @@ import DonkeyCore
 
 /// Client for StoreKit 2 receipt verification.
 ///
-///   POST /api/v1/receipt/verify  — authed, body `{ "transactionJWS": "<jws>" }`
+///   POST /api/v1/receipts/verify  — authed, body `{ "transaction_jws": "<jws>" }`
 ///
 /// The App Store Server Notifications webhook lives at
-/// `/api/v1/receipt/webhook` on the backend but is server-only — the iOS
+/// `/api/v1/receipts/webhook` on the backend but is server-only — the iOS
 /// app never calls it, so the SDK does not expose it.
 ///
 /// Usage:
@@ -33,9 +33,9 @@ public struct ReceiptClient: Sendable {
     /// and returns the canonical status.
     @discardableResult
     public func verify(transactionJWS: String) async throws -> ReceiptVerifyResponse {
-        let body = VerifyRequest(transactionJWS: transactionJWS)
+        let body = VerifyRequest(transactionJws: transactionJWS)
         return try await client.request(
-            "\(basePath)/receipt/verify",
+            "\(basePath)/receipts/verify",
             method: .post,
             body: body
         )
@@ -43,12 +43,15 @@ public struct ReceiptClient: Sendable {
 
     // MARK: Wire types
 
-    // NOTE: the server reads this field as `transactionJWS` (camelCase) in
-    // `handlers/support-routes.ts` — see the `const { transactionJWS } =
-    // await ctx.req.json()` line. This is one of the rare camelCase keys in
-    // the bible-app API surface, so it's intentional and should NOT be
-    // changed to snake_case here.
+    /// Body for `POST /receipts/verify`. The server's canonical body key is
+    /// `transaction_jws` (snake_case, matching the rest of the API surface).
+    /// The old `transactionJWS` camelCase key is still accepted by the
+    /// backend as a transitional alias, but new clients should use snake_case.
     private struct VerifyRequest: Encodable, Sendable {
-        let transactionJWS: String
+        let transactionJws: String
+
+        enum CodingKeys: String, CodingKey {
+            case transactionJws = "transaction_jws"
+        }
     }
 }

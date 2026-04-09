@@ -478,6 +478,8 @@ interface DeviceToken {
   enabled: boolean;
   last_seen_at: Date | string;
   apns_topic?: string;           // APNs topic override (e.g. for watchOS)
+  apns_environment?: string;     // "production" | "sandbox" — backend routes pushes accordingly
+  build_channel?: string;        // "debug" | "testflight" | "appstore" — env-scoped delivery + diagnostics
 }
 
 interface NotificationPreferences {
@@ -519,7 +521,7 @@ interface NotifySchedulerConfig {
 ```typescript
 class NotifyService {
   constructor(db: NotifyDB, push: PushProvider)
-  async registerDevice(userId: string, input: { token: string; platform?: string; device_model?: string; os_version?: string; app_version?: string; apns_topic?: string }): Promise<{ status: string }>
+  async registerDevice(userId: string, input: { token: string; platform?: string; device_model?: string; os_version?: string; app_version?: string; apns_topic?: string; apns_environment?: string; build_channel?: string }): Promise<{ status: string }>
   async disableDevice(userId: string, token: string): Promise<{ status: string }>
   async getPreferences(userId: string): Promise<NotificationPreferences>
   async updatePreferences(userId: string, input: Partial<{ push_enabled: boolean; interval_seconds: number; wake_hour: number; sleep_hour: number; timezone: string; stop_after_goal: boolean }>): Promise<NotificationPreferences>

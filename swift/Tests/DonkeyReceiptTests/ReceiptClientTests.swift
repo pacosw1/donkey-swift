@@ -6,16 +6,21 @@ final class ReceiptClientTests: XCTestCase {
 
     // MARK: Wire format
 
-    func testVerifyRequestEncodesCamelCaseKey() throws {
-        // The bible-app server reads `transactionJWS` in camelCase.
-        // snake_case would 400 the request — lock it down.
+    func testVerifyRequestEncodesSnakeCaseKey() throws {
+        // Canonical wire format on the bible-app server is `transaction_jws`
+        // in snake_case — matching the rest of the API surface. The old
+        // camelCase `transactionJWS` key is kept as a transitional alias on
+        // the server side, but new clients always send snake_case.
         struct Probe: Encodable {
-            let transactionJWS: String
+            let transactionJws: String
+            enum CodingKeys: String, CodingKey {
+                case transactionJws = "transaction_jws"
+            }
         }
-        let data = try JSONEncoder().encode(Probe(transactionJWS: "signed.jws"))
+        let data = try JSONEncoder().encode(Probe(transactionJws: "signed.jws"))
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-        XCTAssertEqual(json["transactionJWS"] as? String, "signed.jws")
-        XCTAssertNil(json["transaction_jws"])
+        XCTAssertEqual(json["transaction_jws"] as? String, "signed.jws")
+        XCTAssertNil(json["transactionJWS"])
     }
 
     // MARK: Response decoding
@@ -87,7 +92,7 @@ final class ReceiptClientTests: XCTestCase {
         XCTAssertEqual(result.status, "active")
 
         let recorded = try XCTUnwrap(ReceiptStubURLProtocol.lastRequest)
-        XCTAssertEqual(recorded.url?.path, "/api/v1/receipt/verify")
+        XCTAssertEqual(recorded.url?.path, "/api/v1/receipts/verify")
         XCTAssertEqual(recorded.httpMethod, "POST")
         XCTAssertEqual(recorded.value(forHTTPHeaderField: "Authorization"), "Bearer sess")
         XCTAssertEqual(recorded.value(forHTTPHeaderField: "X-App-Stage"), "appstore")

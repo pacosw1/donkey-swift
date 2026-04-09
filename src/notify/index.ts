@@ -30,6 +30,21 @@ export interface DeviceToken {
   last_seen_at: Date | string;
   /** APNs topic override for this device (e.g. "com.app.watchkitapp" for watchOS). Falls back to PushConfig.topic if not set. */
   apns_topic?: string;
+  /**
+   * APNs environment this token was minted against. Relevant for apps that
+   * ship a single backend for both TestFlight (sandbox) and App Store
+   * (production) builds — the backend routes pushes to the correct APNs
+   * endpoint by reading this field. Acceptable values: "production" |
+   * "sandbox". Defaults to "production" when unset.
+   */
+  apns_environment?: string;
+  /**
+   * Build channel the device is running, e.g. "debug" | "testflight" |
+   * "appstore". Orthogonal to `apns_environment` because the same build
+   * channel can use either APNs env. Used for diagnostics fan-out and
+   * environment-scoped notification delivery.
+   */
+  build_channel?: string;
 }
 
 export interface NotificationPreferences {
@@ -73,6 +88,10 @@ export class NotifyService {
       os_version?: string;
       app_version?: string;
       apns_topic?: string;
+      /** "production" | "sandbox" — see DeviceToken.apns_environment. */
+      apns_environment?: string;
+      /** "debug" | "testflight" | "appstore" — see DeviceToken.build_channel. */
+      build_channel?: string;
     }
   ): Promise<{ status: string }> {
     if (!input.token) throw new ValidationError("token is required");
@@ -80,6 +99,12 @@ export class NotifyService {
     if (input.device_model && input.device_model.length > 100) throw new ValidationError("device_model too long");
     if (input.os_version && input.os_version.length > 50) throw new ValidationError("os_version too long");
     if (input.app_version && input.app_version.length > 50) throw new ValidationError("app_version too long");
+    if (input.apns_environment && !["production", "sandbox"].includes(input.apns_environment)) {
+      throw new ValidationError("apns_environment must be 'production' or 'sandbox'");
+    }
+    if (input.build_channel && input.build_channel.length > 20) {
+      throw new ValidationError("build_channel too long");
+    }
 
     const dt: DeviceToken = {
       id: randomUUID(),
@@ -92,6 +117,8 @@ export class NotifyService {
       enabled: true,
       last_seen_at: new Date(),
       apns_topic: input.apns_topic,
+      apns_environment: input.apns_environment,
+      build_channel: input.build_channel,
     };
 
     try {

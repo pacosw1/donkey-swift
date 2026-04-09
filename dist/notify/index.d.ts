@@ -24,6 +24,21 @@ export interface DeviceToken {
     last_seen_at: Date | string;
     /** APNs topic override for this device (e.g. "com.app.watchkitapp" for watchOS). Falls back to PushConfig.topic if not set. */
     apns_topic?: string;
+    /**
+     * APNs environment this token was minted against. Relevant for apps that
+     * ship a single backend for both TestFlight (sandbox) and App Store
+     * (production) builds — the backend routes pushes to the correct APNs
+     * endpoint by reading this field. Acceptable values: "production" |
+     * "sandbox". Defaults to "production" when unset.
+     */
+    apns_environment?: string;
+    /**
+     * Build channel the device is running, e.g. "debug" | "testflight" |
+     * "appstore". Orthogonal to `apns_environment` because the same build
+     * channel can use either APNs env. Used for diagnostics fan-out and
+     * environment-scoped notification delivery.
+     */
+    build_channel?: string;
 }
 export interface NotificationPreferences {
     user_id: string;
@@ -54,6 +69,10 @@ export declare class NotifyService {
         os_version?: string;
         app_version?: string;
         apns_topic?: string;
+        /** "production" | "sandbox" — see DeviceToken.apns_environment. */
+        apns_environment?: string;
+        /** "debug" | "testflight" | "appstore" — see DeviceToken.build_channel. */
+        build_channel?: string;
     }): Promise<{
         status: string;
     }>;
