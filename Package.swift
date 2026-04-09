@@ -23,8 +23,10 @@ let package = Package(
         .macOS(.v14),
     ],
     products: [
-        .library(name: "DonkeyCore",  targets: ["DonkeyCore"]),
-        .library(name: "DonkeyFlags", targets: ["DonkeyFlags"]),
+        .library(name: "DonkeyCore",   targets: ["DonkeyCore"]),
+        .library(name: "DonkeyFlags",  targets: ["DonkeyFlags"]),
+        .library(name: "DonkeyAuth",   targets: ["DonkeyAuth"]),
+        .library(name: "DonkeyEngage", targets: ["DonkeyEngage"]),
     ],
     targets: [
         // Transport, auth token provider, errors, AnyCodable. Every other
@@ -41,10 +43,33 @@ let package = Package(
             dependencies: ["DonkeyCore"],
             path: "swift/Sources/DonkeyFlags"
         ),
+        // Auth client — Apple Sign-In, session refresh, logout, /me.
+        .target(
+            name: "DonkeyAuth",
+            dependencies: ["DonkeyCore"],
+            path: "swift/Sources/DonkeyAuth"
+        ),
+        // Engage client — event tracking, paywall eligibility, feedback,
+        // session reporting, subscription updates.
+        .target(
+            name: "DonkeyEngage",
+            dependencies: ["DonkeyCore"],
+            path: "swift/Sources/DonkeyEngage"
+        ),
         .testTarget(
             name: "DonkeyFlagsTests",
             dependencies: ["DonkeyFlags"],
             path: "swift/Tests/DonkeyFlagsTests"
+        ),
+        .testTarget(
+            name: "DonkeyAuthTests",
+            dependencies: ["DonkeyAuth"],
+            path: "swift/Tests/DonkeyAuthTests"
+        ),
+        .testTarget(
+            name: "DonkeyEngageTests",
+            dependencies: ["DonkeyEngage"],
+            path: "swift/Tests/DonkeyEngageTests"
         ),
     ]
 )
