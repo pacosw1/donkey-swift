@@ -35,6 +35,7 @@ const { token, user } = await auth.authenticateWithApple(identityToken);
 | `middleware` | Rate limiter, bearer token extraction, request ID generation |
 | `migrate` | SQL migration runner (idempotent, IF NOT EXISTS) |
 | `health` | Liveness and readiness probes with pluggable checks |
+| `logging` | Structured JSON logging and persisted client/server error reporting |
 | `logbuf` | Ring-buffer log capture for admin panels |
 | `scheduler` | Periodic background task runner (setInterval-based) |
 | `auth` | Apple Sign-In, JWT sessions, optional server-side session store |

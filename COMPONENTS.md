@@ -123,6 +123,87 @@ function pushCheck(name: string, tokenFn: () => Promise<unknown>): Check
 
 ---
 
+## logging
+
+Structured JSON logging plus durable error report persistence hooks for backend APIs and mobile clients.
+
+### Types
+
+```typescript
+type LogLevel = "debug" | "info" | "warn" | "error"
+type LogFields = Record<string, string | number | boolean | null | undefined | string[] | number[] | boolean[] | Record<string, unknown> | Array<Record<string, unknown>>>
+
+interface Logger {
+  debug(message: string, fields?: LogFields): void
+  info(message: string, fields?: LogFields): void
+  warn(message: string, fields?: LogFields): void
+  error(message: string, fields?: LogFields): void
+  child(fields: LogFields): Logger
+}
+
+interface ErrorReportRecord {
+  source: "server" | "client"
+  level?: LogLevel
+  category: string
+  message: string
+  stack?: string | null
+  userId?: string | null
+  path?: string | null
+  method?: string | null
+  requestId?: string | null
+  appVersion?: string | null
+  appBuild?: string | null
+  language?: string | null
+  deviceModel?: string | null
+  osVersion?: string | null
+  metadata?: Record<string, unknown> | null
+  createdAt?: Date | string
+}
+
+interface ErrorReportDB {
+  saveErrorReport(report: ErrorReportRecord): Promise<void>
+}
+```
+
+### Functions
+
+```typescript
+function createLogger(options?: {
+  minLevel?: LogLevel
+  baseFields?: LogFields
+  writer?: (line: string, level: LogLevel) => void
+}): Logger
+
+function serializeError(error: unknown): Record<string, unknown>
+
+class ErrorReportingService {
+  constructor(db: ErrorReportDB)
+  report(record: ErrorReportRecord): Promise<void>
+  submitClientReport(
+    report: {
+      level?: LogLevel
+      category: string
+      message: string
+      stack?: string | null
+      app_version?: string | null
+      app_build?: string | null
+      language?: string | null
+      device_model?: string | null
+      os_version?: string | null
+      metadata?: Record<string, unknown> | null
+    },
+    ctx?: {
+      userId?: string | null
+      path?: string | null
+      method?: string | null
+      requestId?: string | null
+    },
+  ): Promise<void>
+}
+```
+
+---
+
 ## logbuf
 
 Ring-buffer log capture for admin panels.
