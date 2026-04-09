@@ -1258,7 +1258,7 @@ class AccountService {
 
 ## flags
 
-Feature flags with percentage rollout, per-user overrides, typed values, and optional in-memory cache.
+Feature flags with a rule-based targeting engine. Supports AND/OR condition trees, deterministic percentage rollout, per-user overrides, weighted A/B variants, and typed values. Optional in-memory cache and exposure hook for analytics.
 
 ### DB Interface
 
@@ -1276,23 +1276,94 @@ interface FlagsDB {
 }
 ```
 
+The DB implementation must round-trip `rules`, `variants`, and `default_value` as JSON
+columns (e.g. `jsonb` in Postgres) so the targeting engine can read them back.
+
 ### Types
 
 ```typescript
+type FlagJsonValue =
+  | string | number | boolean | null
+  | FlagJsonValue[]
+  | { [key: string]: FlagJsonValue };
+
 interface Flag {
   key: string;
-  enabled: boolean;
-  rollout_pct: number;
+  enabled: boolean;              // global kill switch
+  rollout_pct: number;           // legacy — used only when rules is empty
   description: string;
-  value?: string | null;                                        // typed value (string, number, or JSON)
+  value?: string | null;         // v1 typed value
   value_type?: "boolean" | "string" | "number" | "json";
+  default_value?: FlagJsonValue; // served when no rule matches (v2)
+  rules?: FlagRule[];            // ordered — first match wins (v2)
+  variants?: Variant[];          // named variant catalog (v2)
   created_at: Date;
   updated_at: Date;
 }
 
-interface FlagsConfig {
-  cacheTtlMs?: number;  // in-memory cache TTL in ms (default: 0 = no cache)
+interface FlagContext {
+  userId: string;                // required — used for deterministic bucketing
+  appVersion?: string;           // semver
+  appBuild?: string;
+  platform?: "ios" | "android" | "web";
+  deviceModel?: string;
+  osVersion?: string;
+  locale?: string;
+  country?: string;
+  email?: string;
+  isPro?: boolean;
+  userCreatedAt?: Date | string;
+  custom?: Record<string, string | number | boolean>;
 }
+
+type Condition =
+  | { op: "and" | "or"; children: Condition[] }
+  | { op: "not"; child: Condition }
+  | { op: "eq" | "neq"; attr: string; value: string | number | boolean }
+  | { op: "in" | "nin"; attr: string; values: Array<string | number> }
+  | { op: "gt" | "gte" | "lt" | "lte"; attr: string; value: number }
+  | { op: "matches"; attr: string; pattern: string }      // regex
+  | { op: "semver_gte" | "semver_lt"; attr: string; value: string }
+  | { op: "percentage"; pct: number; seed?: string };     // 0-100, 0.01% precision
+
+type FlagServe =
+  | { kind: "value"; value: FlagJsonValue }
+  | { kind: "variant"; variant: string }
+  | { kind: "variants"; variants: Variant[] };            // weighted A/B split
+
+interface FlagRule {
+  id: string;
+  description?: string;
+  condition: Condition;
+  serve: FlagServe;
+}
+
+interface Variant {
+  key: string;
+  value: FlagJsonValue;
+  weight: number;                // integer; buckets are weight / sum(weights)
+}
+
+interface EvaluationResult {
+  value: FlagJsonValue;
+  matched: boolean;
+  ruleId?: string;
+  variantKey?: string;
+}
+
+interface FlagsConfig {
+  cacheTtlMs?: number;           // in-memory cache TTL in ms (default: 0 = no cache)
+  onExposure?: (ctx: FlagContext, key: string, result: EvaluationResult) => void;
+}
+```
+
+Supported attribute paths in conditions (closed set — typos return `undefined`):
+
+```
+user.id            user.email            user.isPro         user.createdAt
+app.version        app.build             app.platform       app.locale        app.country
+device.model       device.osVersion
+custom.<any>
 ```
 
 ### Functions
@@ -1300,20 +1371,55 @@ interface FlagsConfig {
 ```typescript
 class FlagsService {
   constructor(db: FlagsDB, cfg?: FlagsConfig)
+
+  // v2 targeting engine (preferred)
+  async evaluate(key: string, ctx: FlagContext): Promise<EvaluationResult>
+  async evaluateAll(ctx: FlagContext, keys?: string[]): Promise<Record<string, EvaluationResult>>
+
+  // v2 rule + variant management
+  async listRules(key: string): Promise<FlagRule[]>
+  async upsertRules(key: string, rules: FlagRule[]): Promise<Flag>
+  async addVariant(key: string, variant: Variant): Promise<Flag>
+  async removeVariant(key: string, variantKey: string): Promise<Flag>
+
+  // v1 compat shims (delegate to evaluate with { userId })
   async isEnabled(key: string, userId: string): Promise<boolean>
   async getValue(key: string, userId: string): Promise<string | number | Record<string, unknown> | null>
-  invalidate(key: string): void
-  clearCache(): void
   async check(userId: string, key: string): Promise<{ key: string; enabled: boolean; value?: string | null }>
   async batchCheck(userId: string, keys: string[]): Promise<{ flags: Record<string, boolean> }>
+
+  // CRUD
   async listFlags(): Promise<{ flags: Flag[] }>
-  async createFlag(input: { key?: string; enabled?: boolean; rollout_pct?: number; description?: string; value?: string; value_type?: string }): Promise<Flag>
-  async updateFlag(key: string, input: { enabled?: boolean; rollout_pct?: number; description?: string; value?: string; value_type?: string }): Promise<Flag>
+  async createFlag(input: { key?: string; enabled?: boolean; rollout_pct?: number; description?: string; value?: string; value_type?: string; default_value?: FlagJsonValue; rules?: FlagRule[]; variants?: Variant[] }): Promise<Flag>
+  async updateFlag(key: string, input: { enabled?: boolean; rollout_pct?: number; description?: string; value?: string; value_type?: string; default_value?: FlagJsonValue; rules?: FlagRule[]; variants?: Variant[] }): Promise<Flag>
   async deleteFlag(key: string): Promise<{ status: string }>
+
+  // Per-user override (highest precedence — admin hotfix path)
   async setOverride(key: string, userId: string, enabled: boolean): Promise<void>
   async deleteOverride(key: string, userId: string): Promise<void>
+
+  // Cache
+  invalidate(key: string): void
+  clearCache(): void
 }
+
+// Pure evaluator — exported for clients that want to evaluate a flag snapshot
+// locally (e.g. a Swift/TS SDK with a cached rules bundle).
+function evaluateFlag(flag: Flag, ctx: FlagContext): EvaluationResult
+function resolveAttr(ctx: FlagContext, path: string): string | number | boolean | undefined
 ```
+
+### Evaluation precedence
+
+1. **User override** (`FlagsDB.getUserOverride`) — always wins if present
+2. **Kill switch** (`flag.enabled === false`) — serves `default_value`
+3. **Ordered rules** — first rule whose `condition` matches returns its `serve`
+4. **Legacy fallback** — if `rules` is empty, falls back to `rollout_pct` (v1 path)
+5. **Default** — serves `default_value` (or `false` if unset)
+
+Percentage buckets are deterministic: `crc32(${seed ?? flagKey}:${userId}) % 10_000`, so
+the same user lands in the same bucket across processes and restarts. Variant assignment
+uses the seed `${flagKey}:${userId}:variants` — sticky as long as weights don't change.
 
 ---
 

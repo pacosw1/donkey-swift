@@ -90,6 +90,14 @@ export const featureFlags = pgTable("feature_flags", {
   enabled: boolean("enabled").notNull().default(true),
   rolloutPct: integer("rollout_pct").notNull().default(100),
   description: text("description").notNull().default(""),
+  // v1 typed-value columns (still read by the legacy getValue() path)
+  value: text("value"),
+  valueType: text("value_type").notNull().default("boolean"),
+  // v2 targeting engine columns — all json so the service can read them back
+  // as Condition trees / Variant arrays without any schema migration per flag.
+  defaultValue: jsonb("default_value").notNull().default(false),
+  rules: jsonb("rules").notNull().default([]),
+  variants: jsonb("variants"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
