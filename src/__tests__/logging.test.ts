@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createLogger,
+  DiagnosticsService,
   ErrorReportingService,
-  type ErrorReportDB,
+  type DiagnosticsDB,
   serializeError,
 } from "../logging/index.js";
 
@@ -34,21 +35,33 @@ describe("logging", () => {
     expect(serializeError("bad").message).toBe("bad");
   });
 
-  it("persists server or client error reports through the db interface", async () => {
+  it("persists diagnostics with event types and breadcrumbs", async () => {
     const saved: Array<Record<string, unknown>> = [];
-    const db: ErrorReportDB = {
-      async saveErrorReport(report) {
+    const db: DiagnosticsDB = {
+      async saveDiagnosticEvent(report) {
         saved.push(report as Record<string, unknown>);
       },
     };
 
-    const service = new ErrorReportingService(db);
-    await service.submitClientReport(
+    const service = new DiagnosticsService(db);
+    await service.submitClientEvent(
       {
-        category: "network_request_failed",
-        message: "timed out",
+        type: "performance",
+        level: "warn",
+        category: "sync_duration",
+        message: "Sync exceeded duration threshold",
+        session_id: "session-1",
+        installation_id: "install-1",
         app_version: "1.2.3",
         device_model: "iPhone16,1",
+        platform: "ios",
+        breadcrumbs: [
+          {
+            category: "screen",
+            message: "Opened Home",
+          },
+        ],
+        metadata: { duration_ms: 3812 },
       },
       {
         userId: "user-1",
@@ -58,11 +71,39 @@ describe("logging", () => {
 
     expect(saved).toHaveLength(1);
     expect(saved[0].source).toBe("client");
-    expect(saved[0].category).toBe("network_request_failed");
-    expect(saved[0].message).toBe("timed out");
+    expect(saved[0].eventType).toBe("performance");
+    expect(saved[0].category).toBe("sync_duration");
     expect(saved[0].userId).toBe("user-1");
     expect(saved[0].appVersion).toBe("1.2.3");
     expect(saved[0].deviceModel).toBe("iPhone16,1");
+    expect(saved[0].platform).toBe("ios");
     expect(saved[0].createdAt).toBeInstanceOf(Date);
+    expect(saved[0].breadcrumbs).toMatchObject([
+      {
+        category: "screen",
+        message: "Opened Home",
+      },
+    ]);
+  });
+
+  it("keeps the older error reporting API working", async () => {
+    const saved: Array<Record<string, unknown>> = [];
+    const db: DiagnosticsDB = {
+      async saveDiagnosticEvent(report) {
+        saved.push(report as Record<string, unknown>);
+      },
+    };
+
+    const service = new ErrorReportingService(db);
+    await service.submitClientReport({
+      category: "network_request_failed",
+      message: "timed out",
+      app_version: "1.2.3",
+      device_model: "iPhone16,1",
+    });
+
+    expect(saved).toHaveLength(1);
+    expect(saved[0].eventType).toBe("error");
+    expect(saved[0].category).toBe("network_request_failed");
   });
 });

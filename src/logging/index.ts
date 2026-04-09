@@ -1,6 +1,7 @@
 import { ServiceError } from "../errors/index.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
+export type DiagnosticEventType = "error" | "crash" | "performance" | "lifecycle";
 
 type PrimitiveLogValue = string | number | boolean | null | undefined;
 export type LogValue =
@@ -25,8 +26,17 @@ export interface LoggerOptions {
   writer?: (line: string, level: LogLevel) => void;
 }
 
-export interface ErrorReportRecord {
+export interface DiagnosticBreadcrumb {
+  ts?: Date | string;
+  level?: LogLevel;
+  category: string;
+  message: string;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface DiagnosticEventRecord {
   source: "server" | "client";
+  eventType?: DiagnosticEventType;
   level?: LogLevel;
   category: string;
   message: string;
@@ -35,31 +45,53 @@ export interface ErrorReportRecord {
   path?: string | null;
   method?: string | null;
   requestId?: string | null;
+  sessionId?: string | null;
+  installationId?: string | null;
   appVersion?: string | null;
   appBuild?: string | null;
   language?: string | null;
   deviceModel?: string | null;
   osVersion?: string | null;
+  platform?: string | null;
+  breadcrumbs?: DiagnosticBreadcrumb[] | null;
   metadata?: Record<string, unknown> | null;
   createdAt?: Date | string;
 }
 
-export interface ErrorReportDB {
-  saveErrorReport(report: ErrorReportRecord): Promise<void>;
+export interface DiagnosticsDB {
+  saveDiagnosticEvent(report: DiagnosticEventRecord): Promise<void>;
 }
 
-export interface ClientErrorReportInput {
+export type ErrorReportRecord = DiagnosticEventRecord;
+export type ErrorReportDB = DiagnosticsDB;
+
+export interface ClientDiagnosticBreadcrumbInput {
+  ts?: string | null;
+  level?: LogLevel;
+  category: string;
+  message: string;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface ClientDiagnosticsEventInput {
+  type?: DiagnosticEventType;
   level?: LogLevel;
   category: string;
   message: string;
   stack?: string | null;
+  session_id?: string | null;
+  installation_id?: string | null;
   app_version?: string | null;
   app_build?: string | null;
   language?: string | null;
   device_model?: string | null;
   os_version?: string | null;
+  platform?: string | null;
+  breadcrumbs?: ClientDiagnosticBreadcrumbInput[] | null;
   metadata?: Record<string, unknown> | null;
 }
+
+export type ClientErrorReportInput = ClientDiagnosticsEventInput;
 
 const LEVEL_ORDER: Record<LogLevel, number> = {
   debug: 10,
@@ -108,21 +140,76 @@ export function createLogger(options: LoggerOptions = {}): Logger {
   };
 }
 
-export class ErrorReportingService {
-  constructor(private readonly db: ErrorReportDB) {}
+export class DiagnosticsService {
+  constructor(private readonly db: DiagnosticsDB) {}
 
-  async report(record: ErrorReportRecord): Promise<void> {
-    validateErrorReport(record);
+  async report(record: DiagnosticEventRecord): Promise<void> {
+    validateDiagnosticEvent(record);
 
     try {
-      await this.db.saveErrorReport({
+      await this.db.saveDiagnosticEvent({
         ...record,
+        eventType: record.eventType || "error",
         level: record.level || "error",
+        platform: record.platform || null,
+        breadcrumbs: normalizeBreadcrumbs(record.breadcrumbs),
         createdAt: record.createdAt || new Date(),
       });
     } catch {
-      throw new ServiceError("INTERNAL", "failed to persist error report");
+      throw new ServiceError("INTERNAL", "failed to persist diagnostic event");
     }
+  }
+
+  async submitClientEvent(
+    event: ClientDiagnosticsEventInput,
+    ctx?: {
+      userId?: string | null;
+      path?: string | null;
+      method?: string | null;
+      requestId?: string | null;
+    },
+  ): Promise<void> {
+    if (!event.message?.trim()) {
+      throw new ServiceError("INVALID", "diagnostic message is required");
+    }
+
+    await this.report({
+      source: "client",
+      eventType: event.type || "error",
+      level: event.level || "error",
+      category: event.category || "app",
+      message: event.message.trim(),
+      stack: event.stack || null,
+      userId: ctx?.userId || null,
+      path: ctx?.path || null,
+      method: ctx?.method || null,
+      requestId: ctx?.requestId || null,
+      sessionId: event.session_id || null,
+      installationId: event.installation_id || null,
+      appVersion: event.app_version || null,
+      appBuild: event.app_build || null,
+      language: event.language || null,
+      deviceModel: event.device_model || null,
+      osVersion: event.os_version || null,
+      platform: event.platform || null,
+      breadcrumbs: normalizeClientBreadcrumbs(event.breadcrumbs),
+      metadata: event.metadata || null,
+    });
+  }
+}
+
+export class ErrorReportingService {
+  private readonly diagnostics: DiagnosticsService;
+
+  constructor(db: ErrorReportDB) {
+    this.diagnostics = new DiagnosticsService(db);
+  }
+
+  async report(record: ErrorReportRecord): Promise<void> {
+    await this.diagnostics.report({
+      ...record,
+      eventType: record.eventType || "error",
+    });
   }
 
   async submitClientReport(
@@ -134,27 +221,13 @@ export class ErrorReportingService {
       requestId?: string | null;
     },
   ): Promise<void> {
-    if (!report.message?.trim()) {
-      throw new ServiceError("INVALID", "error message is required");
-    }
-
-    await this.report({
-      source: "client",
-      level: report.level || "error",
-      category: report.category || "app",
-      message: report.message.trim(),
-      stack: report.stack || null,
-      userId: ctx?.userId || null,
-      path: ctx?.path || null,
-      method: ctx?.method || null,
-      requestId: ctx?.requestId || null,
-      appVersion: report.app_version || null,
-      appBuild: report.app_build || null,
-      language: report.language || null,
-      deviceModel: report.device_model || null,
-      osVersion: report.os_version || null,
-      metadata: report.metadata || null,
-    });
+    await this.diagnostics.submitClientEvent(
+      {
+        ...report,
+        type: report.type || "error",
+      },
+      ctx,
+    );
   }
 }
 
@@ -170,13 +243,49 @@ export function serializeError(error: unknown): Record<string, unknown> {
   return { message: String(error) };
 }
 
-function validateErrorReport(record: ErrorReportRecord): void {
+function validateDiagnosticEvent(record: DiagnosticEventRecord): void {
   if (!record.category?.trim()) {
-    throw new ServiceError("INVALID", "error category is required");
+    throw new ServiceError("INVALID", "diagnostic category is required");
   }
   if (!record.message?.trim()) {
-    throw new ServiceError("INVALID", "error message is required");
+    throw new ServiceError("INVALID", "diagnostic message is required");
   }
+}
+
+function normalizeClientBreadcrumbs(
+  breadcrumbs: ClientDiagnosticBreadcrumbInput[] | null | undefined,
+): DiagnosticBreadcrumb[] | null {
+  if (!breadcrumbs?.length) {
+    return null;
+  }
+
+  return breadcrumbs
+    .filter((breadcrumb) => breadcrumb.category?.trim() && breadcrumb.message?.trim())
+    .map((breadcrumb) => ({
+      ts: breadcrumb.ts || new Date().toISOString(),
+      level: breadcrumb.level || "info",
+      category: breadcrumb.category.trim(),
+      message: breadcrumb.message.trim(),
+      metadata: breadcrumb.metadata || null,
+    }));
+}
+
+function normalizeBreadcrumbs(
+  breadcrumbs: DiagnosticBreadcrumb[] | null | undefined,
+): DiagnosticBreadcrumb[] | null {
+  if (!breadcrumbs?.length) {
+    return null;
+  }
+
+  return breadcrumbs
+    .filter((breadcrumb) => breadcrumb.category?.trim() && breadcrumb.message?.trim())
+    .map((breadcrumb) => ({
+      ts: breadcrumb.ts || new Date().toISOString(),
+      level: breadcrumb.level || "info",
+      category: breadcrumb.category.trim(),
+      message: breadcrumb.message.trim(),
+      metadata: breadcrumb.metadata || null,
+    }));
 }
 
 function defaultWriter(line: string, level: LogLevel): void {

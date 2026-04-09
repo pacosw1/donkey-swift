@@ -125,7 +125,7 @@ function pushCheck(name: string, tokenFn: () => Promise<unknown>): Check
 
 ## logging
 
-Structured JSON logging plus durable error report persistence hooks for backend APIs and mobile clients.
+Structured JSON logging plus durable diagnostics persistence hooks for backend APIs and mobile clients.
 
 ### Types
 
@@ -141,8 +141,19 @@ interface Logger {
   child(fields: LogFields): Logger
 }
 
-interface ErrorReportRecord {
+type DiagnosticEventType = "error" | "crash" | "performance" | "lifecycle"
+
+interface DiagnosticBreadcrumb {
+  ts?: Date | string
+  level?: LogLevel
+  category: string
+  message: string
+  metadata?: Record<string, unknown> | null
+}
+
+interface DiagnosticEventRecord {
   source: "server" | "client"
+  eventType?: DiagnosticEventType
   level?: LogLevel
   category: string
   message: string
@@ -151,17 +162,21 @@ interface ErrorReportRecord {
   path?: string | null
   method?: string | null
   requestId?: string | null
+  sessionId?: string | null
+  installationId?: string | null
   appVersion?: string | null
   appBuild?: string | null
   language?: string | null
   deviceModel?: string | null
   osVersion?: string | null
+  platform?: string | null
+  breadcrumbs?: DiagnosticBreadcrumb[] | null
   metadata?: Record<string, unknown> | null
   createdAt?: Date | string
 }
 
-interface ErrorReportDB {
-  saveErrorReport(report: ErrorReportRecord): Promise<void>
+interface DiagnosticsDB {
+  saveDiagnosticEvent(report: DiagnosticEventRecord): Promise<void>
 }
 ```
 
@@ -177,19 +192,24 @@ function createLogger(options?: {
 function serializeError(error: unknown): Record<string, unknown>
 
 class ErrorReportingService {
-  constructor(db: ErrorReportDB)
-  report(record: ErrorReportRecord): Promise<void>
+  constructor(db: DiagnosticsDB)
+  report(record: DiagnosticEventRecord): Promise<void>
   submitClientReport(
     report: {
+      type?: DiagnosticEventType
       level?: LogLevel
       category: string
       message: string
       stack?: string | null
+      session_id?: string | null
+      installation_id?: string | null
       app_version?: string | null
       app_build?: string | null
       language?: string | null
       device_model?: string | null
       os_version?: string | null
+      platform?: string | null
+      breadcrumbs?: DiagnosticBreadcrumb[] | null
       metadata?: Record<string, unknown> | null
     },
     ctx?: {
@@ -199,6 +219,12 @@ class ErrorReportingService {
       requestId?: string | null
     },
   ): Promise<void>
+}
+
+class DiagnosticsService {
+  constructor(db: DiagnosticsDB)
+  report(record: DiagnosticEventRecord): Promise<void>
+  submitClientEvent(report: Parameters<ErrorReportingService["submitClientReport"]>[0], ctx?: Parameters<ErrorReportingService["submitClientReport"]>[1]): Promise<void>
 }
 ```
 
