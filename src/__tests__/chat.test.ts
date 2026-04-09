@@ -250,6 +250,32 @@ describe("ChatService", () => {
       expect(push.sendWithData).not.toHaveBeenCalled();
     });
 
+    it("uses a friendly push body for image attachments", async () => {
+      const sentMsg = makeChatMessage({
+        id: 13,
+        sender: "admin",
+        message: "https://cdn.example.com/support-image.jpg",
+        message_type: "image",
+      });
+      const db = mockDB({
+        sendChatMessage: vi.fn().mockResolvedValue(sentMsg),
+        enabledDeviceTokens: vi.fn().mockResolvedValue(["token-abc"]),
+      });
+      const push = mockPush();
+      const svc = new ChatService(db, push, defaultCfg());
+
+      await svc.adminReply("user-1", sentMsg.message, "image");
+
+      await vi.waitFor(() => {
+        expect(push.sendWithData).toHaveBeenCalledWith(
+          "token-abc",
+          "New message from Support",
+          "Sent a photo",
+          { type: "chat_message", user_id: "user-1" },
+        );
+      });
+    });
+
     it("sends reply successfully", async () => {
       const sentMsg = makeChatMessage({ id: 12, sender: "admin", message: "got it" });
       const db = mockDB({

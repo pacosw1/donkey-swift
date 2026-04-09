@@ -148,7 +148,7 @@ export class ChatService {
         this.broadcastChatMessage(msg);
         // Send push if user has no active WebSocket
         if (!this.hub.hasActiveConnection(`user:${userId}`)) {
-            this.sendChatPush(userId, message);
+            this.sendChatPush(userId, message, messageType ?? "text");
         }
         return { status: "sent", id: msg.id, created_at: msg.created_at };
     }
@@ -182,12 +182,18 @@ export class ChatService {
             this.hub.broadcastToUser(msg.user_id, event);
         }
     }
-    async sendChatPush(userId, message) {
+    async sendChatPush(userId, message, messageType) {
         const tokens = await this.db.enabledDeviceTokens(userId).catch(() => []);
         if (!tokens.length)
             return;
         const title = `New message from ${this.cfg.adminDisplayName ?? "Support"}`;
-        const body = message.length > 100 ? message.slice(0, 97) + "..." : message;
+        const body = messageType === "image"
+            ? "Sent a photo"
+            : messageType === "video"
+                ? "Sent a video"
+                : message.length > 100
+                    ? message.slice(0, 97) + "..."
+                    : message;
         const data = { type: "chat_message", user_id: userId };
         for (const token of tokens) {
             await this.push.sendWithData(token, title, body, data).catch((err) => {
