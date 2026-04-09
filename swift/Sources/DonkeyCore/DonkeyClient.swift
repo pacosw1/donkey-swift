@@ -22,7 +22,19 @@ import Foundation
 ///
 public actor DonkeyClient {
 
+    /// Build channel the client is running under. Sent as the `X-App-Stage`
+    /// header on every request so the backend can fan events out to the
+    /// right APNs environment, sandbox vs production receipt validator, etc.
+    /// The server middleware whitelists exactly these three values and falls
+    /// back to `.appstore` when the header is missing or unrecognized.
+    public enum AppStage: String, Sendable {
+        case debug
+        case testflight
+        case appstore
+    }
+
     public let baseURL: URL
+    public let stage: AppStage?
     private let session: URLSession
     private let tokenProvider: @Sendable () async -> String?
     private let encoder: JSONEncoder
@@ -31,9 +43,11 @@ public actor DonkeyClient {
     public init(
         baseURL: URL,
         tokenProvider: @escaping @Sendable () async -> String? = { nil },
+        stage: AppStage? = nil,
         session: URLSession = .shared
     ) {
         self.baseURL = baseURL
+        self.stage = stage
         self.session = session
         self.tokenProvider = tokenProvider
         self.encoder = JSONEncoder()
@@ -78,6 +92,14 @@ public actor DonkeyClient {
 
         if let token = await tokenProvider(), !token.isEmpty {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        // Attach the build channel identifier so the backend middleware can
+        // route events / receipts / notifications to the right environment.
+        // Applied BEFORE extraHeaders so per-call overrides still win if a
+        // caller explicitly passes a different X-App-Stage.
+        if let stage {
+            req.setValue(stage.rawValue, forHTTPHeaderField: "X-App-Stage")
         }
 
         for (k, v) in extraHeaders {
@@ -130,13 +152,28 @@ public actor DonkeyClient {
     // MARK: Private helpers
 
     private func makeURL(path: String) throws -> URL {
+        // Split any query string off before we mangle the path, otherwise
+        // `NSString.appendingPathComponent` swallows the `?…` portion.
         let trimmed = path.hasPrefix("/") ? path : "/\(path)"
+        let pathOnly: String
+        let queryString: String?
+        if let q = trimmed.firstIndex(of: "?") {
+            pathOnly = String(trimmed[..<q])
+            queryString = String(trimmed[trimmed.index(after: q)...])
+        } else {
+            pathOnly = trimmed
+            queryString = nil
+        }
+
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             throw DonkeyError.invalidRequest(reason: "invalid base URL: \(baseURL)")
         }
-        components.path = (components.path as NSString).appendingPathComponent(trimmed) as String
+        components.path = (components.path as NSString).appendingPathComponent(pathOnly) as String
         // appendingPathComponent above can produce "//api/v1/..." when base path is empty
         components.path = components.path.replacingOccurrences(of: "//", with: "/")
+        if let queryString {
+            components.percentEncodedQuery = queryString
+        }
         guard let url = components.url else {
             throw DonkeyError.invalidRequest(reason: "could not build URL from path: \(path)")
         }
