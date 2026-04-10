@@ -7,7 +7,12 @@ import DonkeyCore
 /// `metadata` field is a JSON-serialized string on the wire — consumers
 /// can either pass a pre-encoded string or use the helper initializer
 /// that accepts an `Encodable` payload and handles encoding.
-public struct EngageEvent: Encodable, Sendable, Equatable {
+///
+/// `Codable` (not just `Encodable`) so consumers can round-trip events
+/// through `DonkeyCore.DeferredStore` for persistent offline queueing —
+/// the store serializes the payload on enqueue and decodes it back on
+/// flush, and that requires `Decodable` on the value type.
+public struct EngageEvent: Codable, Sendable, Equatable {
     public let event: String
     public let metadata: String
     public let timestamp: String
