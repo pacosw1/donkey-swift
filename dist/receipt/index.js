@@ -92,24 +92,48 @@ export class ReceiptService {
             throw new ValidationError("malformed notification payload");
         }
         console.log(`[receipt] webhook: type=${notification.notificationType} subtype=${notification.subtype} env=${notification.data?.environment}`);
+        let decodedTxn = null;
+        if (notification.data?.signedTransactionInfo) {
+            try {
+                decodedTxn = await this.verifyAndParseTransaction(notification.data.signedTransactionInfo);
+            }
+            catch (err) {
+                console.log(`[receipt] webhook transaction verification failed: ${err}`);
+                throw new ValidationError("invalid transaction signature");
+            }
+        }
+        if (this.cfg.onNotification) {
+            try {
+                await this.cfg.onNotification({ notification, transaction: decodedTxn });
+            }
+            catch (err) {
+                console.log(`[receipt] webhook onNotification failed: ${err}`);
+                throw new ServiceError("INTERNAL", "failed to record notification");
+            }
+        }
         if (notification.notificationType === "TEST") {
             return { status: "ok" };
         }
-        if (!notification.data?.signedTransactionInfo) {
+        if (!decodedTxn) {
             throw new ValidationError("missing signed transaction info");
         }
-        let txn;
-        try {
-            txn = await this.verifyAndParseTransaction(notification.data.signedTransactionInfo);
-        }
-        catch (err) {
-            console.log(`[receipt] webhook transaction verification failed: ${err}`);
-            throw new ValidationError("invalid transaction signature");
-        }
-        const validationErr = this.validateTransaction(txn);
+        const txn = decodedTxn;
+        // A REFUND or REVOKE notification always carries a revoked transaction.
+        // Accept it here so the refund is recorded. Other types keep the check.
+        const isRevocation = notification.notificationType === "REFUND" || notification.notificationType === "REVOKE";
+        const validationErr = this.validateTransaction(txn, { allowRevoked: isRevocation });
         if (validationErr)
             throw new ValidationError(validationErr);
-        let userId = await this.db.userIdByTransactionId(txn.originalTransactionId).catch(() => "");
+        // "" means "no such transaction". A thrown error is a read failure:
+        // propagate it so the route returns an error and Apple retries.
+        let userId;
+        try {
+            userId = await this.db.userIdByTransactionId(txn.originalTransactionId);
+        }
+        catch (err) {
+            console.log(`[receipt] webhook user lookup failed: ${err}`);
+            throw new ServiceError("INTERNAL", "failed to look up transaction");
+        }
         if (!userId && txn.appAccountToken)
             userId = txn.appAccountToken;
         if (!userId) {
@@ -124,21 +148,34 @@ export class ReceiptService {
         const priceCents = this.cfg.priceToCents
             ? this.cfg.priceToCents(txn.price, currency)
             : Math.round(txn.price * 100);
-        await this.db.upsertSubscription(userId, txn.productId, txn.originalTransactionId, status, expiresAt, priceCents, currency)
-            .catch((err) => console.log(`[receipt] webhook subscription update failed: ${err}`));
-        await this.db.storeTransaction({
-            transaction_id: txn.transactionId,
-            original_transaction_id: txn.originalTransactionId,
-            user_id: userId,
-            product_id: txn.productId,
-            status,
-            purchase_date: new Date(txn.purchaseDate),
-            expires_date: expiresAt,
-            environment: txn.environment,
-            price_cents: priceCents,
-            currency_code: currency,
-            notification_type: notifType || undefined,
-        }).catch((err) => console.log(`[receipt] failed to store audit: ${err}`));
+        // DB failures must propagate. The route then returns an error and Apple
+        // retries the notification. A 200 here would lose the event forever.
+        try {
+            await this.db.upsertSubscription(userId, txn.productId, txn.originalTransactionId, status, expiresAt, priceCents, currency);
+        }
+        catch (err) {
+            console.log(`[receipt] webhook subscription update failed: ${err}`);
+            throw new ServiceError("INTERNAL", "failed to update subscription");
+        }
+        try {
+            await this.db.storeTransaction({
+                transaction_id: txn.transactionId,
+                original_transaction_id: txn.originalTransactionId,
+                user_id: userId,
+                product_id: txn.productId,
+                status,
+                purchase_date: new Date(txn.purchaseDate),
+                expires_date: expiresAt,
+                environment: txn.environment,
+                price_cents: priceCents,
+                currency_code: currency,
+                notification_type: notifType || undefined,
+            });
+        }
+        catch (err) {
+            console.log(`[receipt] webhook failed to store transaction: ${err}`);
+            throw new ServiceError("INTERNAL", "failed to store transaction");
+        }
         return { status: "ok" };
     }
     // ── JWS Verification ────────────────────────────────────────────────────
@@ -181,7 +218,7 @@ export class ReceiptService {
         const payload = await this.verifyAndDecodePayload(jwsString);
         return JSON.parse(payload);
     }
-    validateTransaction(txn) {
+    validateTransaction(txn, opts = {}) {
         if (!txn.transactionId || !txn.originalTransactionId)
             return "missing transaction ID";
         if (!txn.productId)
@@ -192,7 +229,7 @@ export class ReceiptService {
         if (this.cfg.environment && txn.environment !== this.cfg.environment) {
             return `environment mismatch: got "${txn.environment}", expected "${this.cfg.environment}"`;
         }
-        if (txn.revocationDate && txn.revocationDate > 0)
+        if (!opts.allowRevoked && txn.revocationDate && txn.revocationDate > 0)
             return "transaction has been revoked";
         return null;
     }

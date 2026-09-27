@@ -55,6 +55,27 @@ export interface NotificationHistoryEntry {
   sendAttempts: SendAttempt[];
 }
 
+/**
+ * Body for Send Consumption Information V1
+ * (PUT /inApps/v1/transactions/consumption/{transactionId}).
+ * Every numeric field is Apple's enum value; 0 means "undeclared".
+ */
+export interface ConsumptionRequestV1 {
+  accountTenure: number;
+  /** A UUID, or an empty string when there is none. */
+  appAccountToken: string;
+  consumptionStatus: number;
+  customerConsented: boolean;
+  deliveryStatus: number;
+  lifetimeDollarsPurchased: number;
+  lifetimeDollarsRefunded: number;
+  platform: number;
+  playTime: number;
+  refundPreference: number;
+  sampleContentProvided: boolean;
+  userStatus: number;
+}
+
 export interface SendAttempt {
   attemptDate: number;
   sendAttemptResult: string;
@@ -150,7 +171,7 @@ export class AppStoreServerClient {
       throw new AppStoreError(res.status, text);
     }
 
-    if (res.status === 204) return {} as T;
+    if (res.status === 204 || res.status === 202) return {} as T;
     return (await res.json()) as T;
   }
 
@@ -248,13 +269,26 @@ export class AppStoreServerClient {
     endDate: Date,
     opts?: { paginationToken?: string; notificationType?: string; notificationSubtype?: string }
   ): Promise<NotificationHistoryResponse> {
-    return this.request("POST", "/inApps/v1/notifications/history", {
+    // Apple takes paginationToken as a query parameter, not a body field.
+    const query = opts?.paginationToken
+      ? `?${new URLSearchParams({ paginationToken: opts.paginationToken })}`
+      : "";
+    return this.request("POST", `/inApps/v1/notifications/history${query}`, {
       startDate: startDate.getTime(),
       endDate: endDate.getTime(),
-      ...(opts?.paginationToken ? { paginationToken: opts.paginationToken } : {}),
       ...(opts?.notificationType ? { notificationType: opts.notificationType } : {}),
       ...(opts?.notificationSubtype ? { notificationSubtype: opts.notificationSubtype } : {}),
     });
+  }
+
+  // ── Consumption Information ────────────────────────────────────────────────
+
+  /**
+   * Answer a CONSUMPTION_REQUEST notification. Apple uses this data in its
+   * refund decision. Send it within 12 hours of the notification.
+   */
+  async sendConsumptionInformation(transactionId: string, body: ConsumptionRequestV1): Promise<void> {
+    await this.request("PUT", `/inApps/v1/transactions/consumption/${encodeURIComponent(transactionId)}`, body);
   }
 
   // ── Order Lookup ───────────────────────────────────────────────────────────

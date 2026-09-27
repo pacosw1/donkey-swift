@@ -982,6 +982,8 @@ interface ReceiptConfig {
   bundleId?: string;
   environment?: string;
   priceToCents?: (priceMilliunits: number, currency: string) => number;
+  /** Called for every verified webhook notification before any write. Throwing makes the webhook throw (Apple retries). */
+  onNotification?: (event: { notification: DecodedNotification; transaction: TransactionInfo | null }) => Promise<void>;
 }
 
 /** All possible subscription status strings. */
@@ -1002,6 +1004,8 @@ class ReceiptService {
 ### Webhook Notification Types Handled
 
 `SUBSCRIBED`, `DID_RENEW`, `EXPIRED`, `REFUND`, `REVOKE`, `DID_CHANGE_RENEWAL_STATUS`, `DID_FAIL_TO_RENEW`, `GRACE_PERIOD_EXPIRED`, `OFFER_REDEEMED`, `PRICE_INCREASE`, `RENEWAL_EXTENDED`, `REFUND_DECLINED`, `REFUND_REVERSED`, `TEST`
+
+`REFUND` and `REVOKE` accept a transaction with `revocationDate` and store `refunded` / `revoked`. Other types still reject a revoked transaction. A failed DB write throws `ServiceError("INTERNAL")` so the route returns 5xx and Apple retries.
 
 ---
 
@@ -1096,6 +1100,8 @@ class AppStoreServerClient {
   async getNotificationHistory(startDate: Date, endDate: Date, opts?: {
     paginationToken?: string; notificationType?: string; notificationSubtype?: string;
   }): Promise<NotificationHistoryResponse>
+  /** PUT /inApps/v1/transactions/consumption/{id}. Answer a CONSUMPTION_REQUEST within 12 hours. */
+  async sendConsumptionInformation(transactionId: string, body: ConsumptionRequestV1): Promise<void>
   async lookupOrder(orderId: string): Promise<OrderLookupResponse>
   async requestTestNotification(): Promise<{ testNotificationToken: string }>
   async getTestNotificationStatus(testNotificationToken: string): Promise<{ signedPayload: string; sendAttempts: SendAttempt[] }>

@@ -6,6 +6,10 @@ import { ValidationError, ServiceError } from "../errors/index.js";
 
 export interface ReceiptDB {
   upsertSubscription(userId: string, productId: string, originalTransactionId: string, status: string, expiresAt: Date | string | null, priceCents: number, currencyCode: string): Promise<void>;
+  /**
+   * Resolves "" when no user owns the transaction. Throw only for a read
+   * failure: processWebhook then fails so Apple retries the notification.
+   */
   userIdByTransactionId(originalTransactionId: string): Promise<string>;
   storeTransaction(t: VerifiedTransaction): Promise<void>;
 }
@@ -24,7 +28,24 @@ export interface TransactionInfo {
   currency: string;
   offerType?: number;
   revocationDate?: number;
+  revocationReason?: number;
   appAccountToken?: string;
+}
+
+/** A decoded App Store Server Notification V2 payload. Unknown keys are kept. */
+export interface DecodedNotification {
+  notificationType?: string;
+  subtype?: string;
+  notificationUUID?: string;
+  signedDate?: number;
+  data?: { signedTransactionInfo?: string; signedRenewalInfo?: string; environment?: string; [key: string]: unknown };
+  [key: string]: unknown;
+}
+
+export interface NotificationEvent {
+  notification: DecodedNotification;
+  /** The decoded transaction, or null when the notification carries none (for example TEST). */
+  transaction: TransactionInfo | null;
 }
 
 export interface VerifiedTransaction {
@@ -53,6 +74,12 @@ export interface ReceiptConfig {
   bundleId?: string;
   environment?: string;
   priceToCents?: (priceMilliunits: number, currency: string) => number;
+  /**
+   * Called for every verified webhook notification, before any status is
+   * written. Use it for an append-only notification log. If it throws, the
+   * webhook throws too, so the route returns an error and Apple retries.
+   */
+  onNotification?: (event: NotificationEvent) => Promise<void>;
 }
 
 // ── Apple Root CA ───────────────────────────────────────────────────────────
@@ -142,7 +169,7 @@ export class ReceiptService {
       throw new ValidationError("invalid signature");
     }
 
-    let notification: { notificationType?: string; subtype?: string; data?: { signedTransactionInfo?: string; environment?: string } };
+    let notification: DecodedNotification;
     try {
       notification = JSON.parse(notificationPayload);
     } catch {
@@ -150,26 +177,49 @@ export class ReceiptService {
     }
     console.log(`[receipt] webhook: type=${notification.notificationType} subtype=${notification.subtype} env=${notification.data?.environment}`);
 
+    let decodedTxn: TransactionInfo | null = null;
+    if (notification.data?.signedTransactionInfo) {
+      try {
+        decodedTxn = await this.verifyAndParseTransaction(notification.data.signedTransactionInfo);
+      } catch (err) {
+        console.log(`[receipt] webhook transaction verification failed: ${err}`);
+        throw new ValidationError("invalid transaction signature");
+      }
+    }
+
+    if (this.cfg.onNotification) {
+      try {
+        await this.cfg.onNotification({ notification, transaction: decodedTxn });
+      } catch (err) {
+        console.log(`[receipt] webhook onNotification failed: ${err}`);
+        throw new ServiceError("INTERNAL", "failed to record notification");
+      }
+    }
+
     if (notification.notificationType === "TEST") {
       return { status: "ok" };
     }
 
-    if (!notification.data?.signedTransactionInfo) {
+    if (!decodedTxn) {
       throw new ValidationError("missing signed transaction info");
     }
+    const txn: TransactionInfo = decodedTxn;
 
-    let txn: TransactionInfo;
-    try {
-      txn = await this.verifyAndParseTransaction(notification.data.signedTransactionInfo);
-    } catch (err) {
-      console.log(`[receipt] webhook transaction verification failed: ${err}`);
-      throw new ValidationError("invalid transaction signature");
-    }
-
-    const validationErr = this.validateTransaction(txn);
+    // A REFUND or REVOKE notification always carries a revoked transaction.
+    // Accept it here so the refund is recorded. Other types keep the check.
+    const isRevocation = notification.notificationType === "REFUND" || notification.notificationType === "REVOKE";
+    const validationErr = this.validateTransaction(txn, { allowRevoked: isRevocation });
     if (validationErr) throw new ValidationError(validationErr);
 
-    let userId = await this.db.userIdByTransactionId(txn.originalTransactionId).catch(() => "");
+    // "" means "no such transaction". A thrown error is a read failure:
+    // propagate it so the route returns an error and Apple retries.
+    let userId: string;
+    try {
+      userId = await this.db.userIdByTransactionId(txn.originalTransactionId);
+    } catch (err) {
+      console.log(`[receipt] webhook user lookup failed: ${err}`);
+      throw new ServiceError("INTERNAL", "failed to look up transaction");
+    }
     if (!userId && txn.appAccountToken) userId = txn.appAccountToken;
     if (!userId) {
       console.log(`[receipt] webhook: unknown transaction ${txn.originalTransactionId}`);
@@ -185,10 +235,17 @@ export class ReceiptService {
       ? this.cfg.priceToCents(txn.price, currency)
       : Math.round(txn.price * 100);
 
-    await this.db.upsertSubscription(userId, txn.productId, txn.originalTransactionId, status, expiresAt, priceCents, currency)
-      .catch((err) => console.log(`[receipt] webhook subscription update failed: ${err}`));
+    // DB failures must propagate. The route then returns an error and Apple
+    // retries the notification. A 200 here would lose the event forever.
+    try {
+      await this.db.upsertSubscription(userId, txn.productId, txn.originalTransactionId, status, expiresAt, priceCents, currency);
+    } catch (err) {
+      console.log(`[receipt] webhook subscription update failed: ${err}`);
+      throw new ServiceError("INTERNAL", "failed to update subscription");
+    }
 
-    await this.db.storeTransaction({
+    try {
+      await this.db.storeTransaction({
       transaction_id: txn.transactionId,
       original_transaction_id: txn.originalTransactionId,
       user_id: userId,
@@ -200,7 +257,11 @@ export class ReceiptService {
       price_cents: priceCents,
       currency_code: currency,
       notification_type: notifType || undefined,
-    }).catch((err) => console.log(`[receipt] failed to store audit: ${err}`));
+      });
+    } catch (err) {
+      console.log(`[receipt] webhook failed to store transaction: ${err}`);
+      throw new ServiceError("INTERNAL", "failed to store transaction");
+    }
 
     return { status: "ok" };
   }
@@ -254,7 +315,7 @@ export class ReceiptService {
     return JSON.parse(payload) as TransactionInfo;
   }
 
-  private validateTransaction(txn: TransactionInfo): string | null {
+  private validateTransaction(txn: TransactionInfo, opts: { allowRevoked?: boolean } = {}): string | null {
     if (!txn.transactionId || !txn.originalTransactionId) return "missing transaction ID";
     if (!txn.productId) return "missing product ID";
     if (this.cfg.bundleId && txn.bundleId !== this.cfg.bundleId) {
@@ -263,7 +324,7 @@ export class ReceiptService {
     if (this.cfg.environment && txn.environment !== this.cfg.environment) {
       return `environment mismatch: got "${txn.environment}", expected "${this.cfg.environment}"`;
     }
-    if (txn.revocationDate && txn.revocationDate > 0) return "transaction has been revoked";
+    if (!opts.allowRevoked && txn.revocationDate && txn.revocationDate > 0) return "transaction has been revoked";
     return null;
   }
 
