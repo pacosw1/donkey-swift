@@ -70,7 +70,7 @@ export class AppStoreServerClient {
             const text = await res.text();
             throw new AppStoreError(res.status, text);
         }
-        if (res.status === 204)
+        if (res.status === 204 || res.status === 202)
             return {};
         return (await res.json());
     }
@@ -140,13 +140,24 @@ export class AppStoreServerClient {
      * Request notification history replay. Use after server downtime to catch up on missed webhooks.
      */
     async getNotificationHistory(startDate, endDate, opts) {
-        return this.request("POST", "/inApps/v1/notifications/history", {
+        // Apple takes paginationToken as a query parameter, not a body field.
+        const query = opts?.paginationToken
+            ? `?${new URLSearchParams({ paginationToken: opts.paginationToken })}`
+            : "";
+        return this.request("POST", `/inApps/v1/notifications/history${query}`, {
             startDate: startDate.getTime(),
             endDate: endDate.getTime(),
-            ...(opts?.paginationToken ? { paginationToken: opts.paginationToken } : {}),
             ...(opts?.notificationType ? { notificationType: opts.notificationType } : {}),
             ...(opts?.notificationSubtype ? { notificationSubtype: opts.notificationSubtype } : {}),
         });
+    }
+    // ── Consumption Information ────────────────────────────────────────────────
+    /**
+     * Answer a CONSUMPTION_REQUEST notification. Apple uses this data in its
+     * refund decision. Send it within 12 hours of the notification.
+     */
+    async sendConsumptionInformation(transactionId, body) {
+        await this.request("PUT", `/inApps/v1/transactions/consumption/${encodeURIComponent(transactionId)}`, body);
     }
     // ── Order Lookup ───────────────────────────────────────────────────────────
     /**

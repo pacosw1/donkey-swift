@@ -74,6 +74,115 @@ describe("ReceiptService", () => {
     });
   });
 
+  describe("processWebhook: refunds, retries, notification hook", () => {
+    const baseTxn = {
+      transactionId: "t1",
+      originalTransactionId: "ot1",
+      bundleId: "com.test",
+      productId: "pro_yearly",
+      purchaseDate: 1_700_000_000_000,
+      expiresDate: 1_900_000_000_000,
+      type: "Auto-Renewable Subscription",
+      inAppOwnershipType: "PURCHASED",
+      environment: "Production",
+      price: 49990,
+      currency: "USD",
+    };
+
+    function svcWith(
+      db: ReceiptDB,
+      notification: Record<string, unknown>,
+      txn: Record<string, unknown> | null,
+      cfg: ReceiptConfig = {},
+    ): ReceiptService {
+      const svc = new ReceiptService(db, cfg);
+      vi.spyOn(svc as any, "verifyAndDecodePayload").mockImplementation(async (jws: unknown) => {
+        if (jws === "outer.jws.sig") return JSON.stringify(notification);
+        if (jws === "txn.jws.sig" && txn) return JSON.stringify(txn);
+        throw new Error("unexpected jws");
+      });
+      return svc;
+    }
+
+    const revoked = { ...baseTxn, revocationDate: 1_750_000_000_000, revocationReason: 0 };
+
+    it("stores status refunded for a REFUND notification on a revoked transaction", async () => {
+      const db = mockDB();
+      const svc = svcWith(db, { notificationType: "REFUND", data: { signedTransactionInfo: "txn.jws.sig" } }, revoked);
+      const result = await svc.processWebhook("outer.jws.sig");
+      expect(result.status).toBe("ok");
+      expect(db.upsertSubscription).toHaveBeenCalledWith("user-1", "pro_yearly", "ot1", "refunded", expect.any(Date), expect.any(Number), "USD");
+      expect(db.storeTransaction).toHaveBeenCalledWith(expect.objectContaining({ status: "refunded", notification_type: "REFUND" }));
+    });
+
+    it("stores status revoked for a REVOKE notification on a revoked transaction", async () => {
+      const db = mockDB();
+      const svc = svcWith(db, { notificationType: "REVOKE", data: { signedTransactionInfo: "txn.jws.sig" } }, revoked);
+      await svc.processWebhook("outer.jws.sig");
+      expect(db.upsertSubscription).toHaveBeenCalledWith("user-1", "pro_yearly", "ot1", "revoked", expect.any(Date), expect.any(Number), "USD");
+    });
+
+    it("still rejects a revoked transaction on a non-refund notification", async () => {
+      const svc = svcWith(mockDB(), { notificationType: "DID_RENEW", data: { signedTransactionInfo: "txn.jws.sig" } }, revoked);
+      await expect(svc.processWebhook("outer.jws.sig")).rejects.toThrow(/revoked/);
+    });
+
+    it("throws when the subscription write fails so Apple retries", async () => {
+      const db = mockDB({ upsertSubscription: vi.fn().mockRejectedValue(new Error("db down")) });
+      const svc = svcWith(db, { notificationType: "DID_RENEW", data: { signedTransactionInfo: "txn.jws.sig" } }, baseTxn);
+      await expect(svc.processWebhook("outer.jws.sig")).rejects.toThrow(ServiceError);
+    });
+
+    it("throws when the transaction write fails so Apple retries", async () => {
+      const db = mockDB({ storeTransaction: vi.fn().mockRejectedValue(new Error("db down")) });
+      const svc = svcWith(db, { notificationType: "DID_RENEW", data: { signedTransactionInfo: "txn.jws.sig" } }, baseTxn);
+      await expect(svc.processWebhook("outer.jws.sig")).rejects.toThrow(ServiceError);
+    });
+
+    it("calls onNotification with the decoded notification and transaction", async () => {
+      const onNotification = vi.fn().mockResolvedValue(undefined);
+      const notification = {
+        notificationType: "CONSUMPTION_REQUEST",
+        notificationUUID: "uuid-1",
+        signedDate: 1_760_000_000_000,
+        data: { signedTransactionInfo: "txn.jws.sig", environment: "Production" },
+      };
+      const svc = svcWith(mockDB(), notification, baseTxn, { onNotification });
+      await svc.processWebhook("outer.jws.sig");
+      expect(onNotification).toHaveBeenCalledWith({
+        notification: expect.objectContaining({ notificationUUID: "uuid-1", notificationType: "CONSUMPTION_REQUEST" }),
+        transaction: expect.objectContaining({ transactionId: "t1" }),
+      });
+    });
+
+    it("calls onNotification for TEST notifications without a transaction", async () => {
+      const onNotification = vi.fn().mockResolvedValue(undefined);
+      const svc = svcWith(mockDB(), { notificationType: "TEST", notificationUUID: "uuid-t" }, null, { onNotification });
+      await svc.processWebhook("outer.jws.sig");
+      expect(onNotification).toHaveBeenCalledWith({
+        notification: expect.objectContaining({ notificationUUID: "uuid-t" }),
+        transaction: null,
+      });
+    });
+
+    it("calls onNotification for a unknown transaction too", async () => {
+      const onNotification = vi.fn().mockResolvedValue(undefined);
+      const db = mockDB({ userIdByTransactionId: vi.fn().mockRejectedValue(new Error("not found")) });
+      const svc = svcWith(db, { notificationType: "SUBSCRIBED", data: { signedTransactionInfo: "txn.jws.sig" } }, baseTxn, { onNotification });
+      const result = await svc.processWebhook("outer.jws.sig");
+      expect(result.status).toBe("unknown_transaction");
+      expect(onNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it("throws when onNotification fails so Apple retries", async () => {
+      const onNotification = vi.fn().mockRejectedValue(new Error("log down"));
+      const db = mockDB();
+      const svc = svcWith(db, { notificationType: "DID_RENEW", data: { signedTransactionInfo: "txn.jws.sig" } }, baseTxn, { onNotification });
+      await expect(svc.processWebhook("outer.jws.sig")).rejects.toThrow(ServiceError);
+      expect(db.upsertSubscription).not.toHaveBeenCalled();
+    });
+  });
+
   describe("notificationToStatus", () => {
     // Access the private method via (svc as any) for status mapping tests
     function callNotificationToStatus(

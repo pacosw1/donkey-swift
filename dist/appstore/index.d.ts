@@ -41,6 +41,26 @@ export interface NotificationHistoryEntry {
     signedPayload: string;
     sendAttempts: SendAttempt[];
 }
+/**
+ * Body for Send Consumption Information V1
+ * (PUT /inApps/v1/transactions/consumption/{transactionId}).
+ * Every numeric field is Apple's enum value; 0 means "undeclared".
+ */
+export interface ConsumptionRequestV1 {
+    accountTenure: number;
+    /** A UUID, or an empty string when there is none. */
+    appAccountToken: string;
+    consumptionStatus: number;
+    customerConsented: boolean;
+    deliveryStatus: number;
+    lifetimeDollarsPurchased: number;
+    lifetimeDollarsRefunded: number;
+    platform: number;
+    playTime: number;
+    refundPreference: number;
+    sampleContentProvided: boolean;
+    userStatus: number;
+}
 export interface SendAttempt {
     attemptDate: number;
     sendAttemptResult: string;
@@ -114,6 +134,11 @@ export declare class AppStoreServerClient {
         notificationType?: string;
         notificationSubtype?: string;
     }): Promise<NotificationHistoryResponse>;
+    /**
+     * Answer a CONSUMPTION_REQUEST notification. Apple uses this data in its
+     * refund decision. Send it within 12 hours of the notification.
+     */
+    sendConsumptionInformation(transactionId: string, body: ConsumptionRequestV1): Promise<void>;
     /**
      * Look up an order by order ID (from a customer's receipt email).
      */

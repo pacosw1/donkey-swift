@@ -17,7 +17,27 @@ export interface TransactionInfo {
     currency: string;
     offerType?: number;
     revocationDate?: number;
+    revocationReason?: number;
     appAccountToken?: string;
+}
+/** A decoded App Store Server Notification V2 payload. Unknown keys are kept. */
+export interface DecodedNotification {
+    notificationType?: string;
+    subtype?: string;
+    notificationUUID?: string;
+    signedDate?: number;
+    data?: {
+        signedTransactionInfo?: string;
+        signedRenewalInfo?: string;
+        environment?: string;
+        [key: string]: unknown;
+    };
+    [key: string]: unknown;
+}
+export interface NotificationEvent {
+    notification: DecodedNotification;
+    /** The decoded transaction, or null when the notification carries none (for example TEST). */
+    transaction: TransactionInfo | null;
 }
 export interface VerifiedTransaction {
     transaction_id: string;
@@ -43,6 +63,12 @@ export interface ReceiptConfig {
     bundleId?: string;
     environment?: string;
     priceToCents?: (priceMilliunits: number, currency: string) => number;
+    /**
+     * Called for every verified webhook notification, before any status is
+     * written. Use it for an append-only notification log. If it throws, the
+     * webhook throws too, so the route returns an error and Apple retries.
+     */
+    onNotification?: (event: NotificationEvent) => Promise<void>;
 }
 export declare class ReceiptService {
     private db;

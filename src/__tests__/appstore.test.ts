@@ -160,6 +160,62 @@ describe("AppStoreServerClient", () => {
     });
   });
 
+  // ── sendConsumptionInformation ───────────────────────────────────────────
+
+  describe("sendConsumptionInformation", () => {
+    it("PUTs the body to the v1 consumption URL and accepts an empty 202", async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 202,
+        json: async () => {
+          throw new Error("no body");
+        },
+      });
+
+      const client = new AppStoreServerClient(makeCfg());
+      const body = {
+        accountTenure: 3,
+        appAccountToken: "",
+        consumptionStatus: 2,
+        customerConsented: true,
+        deliveryStatus: 0,
+        lifetimeDollarsPurchased: 2,
+        lifetimeDollarsRefunded: 1,
+        platform: 1,
+        playTime: 3,
+        refundPreference: 2,
+        sampleContentProvided: true,
+        userStatus: 1,
+      };
+      await client.sendConsumptionInformation("txn-refund-1", body);
+
+      const [url, opts] = mockFetch.mock.calls[0];
+      expect(url).toBe("https://api.storekit.itunes.apple.com/inApps/v1/transactions/consumption/txn-refund-1");
+      expect(opts.method).toBe("PUT");
+      expect(JSON.parse(opts.body)).toEqual(body);
+    });
+  });
+
+  // ── getNotificationHistory ────────────────────────────────────────────────
+
+  describe("getNotificationHistory", () => {
+    it("sends paginationToken as a query parameter, not in the body", async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ notificationHistory: [], hasMore: false }),
+      });
+
+      const client = new AppStoreServerClient(makeCfg());
+      await client.getNotificationHistory(new Date(1000), new Date(2000), { paginationToken: "tok 1" });
+
+      const [url, opts] = mockFetch.mock.calls[0];
+      expect(url).toBe("https://api.storekit.itunes.apple.com/inApps/v1/notifications/history?paginationToken=tok+1");
+      expect(opts.method).toBe("POST");
+      expect(JSON.parse(opts.body)).toEqual({ startDate: 1000, endDate: 2000 });
+    });
+  });
+
   // ── Error handling ────────────────────────────────────────────────────────
 
   describe("error handling", () => {
