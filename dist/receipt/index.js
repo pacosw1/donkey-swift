@@ -124,7 +124,16 @@ export class ReceiptService {
         const validationErr = this.validateTransaction(txn, { allowRevoked: isRevocation });
         if (validationErr)
             throw new ValidationError(validationErr);
-        let userId = await this.db.userIdByTransactionId(txn.originalTransactionId).catch(() => "");
+        // "" means "no such transaction". A thrown error is a read failure:
+        // propagate it so the route returns an error and Apple retries.
+        let userId;
+        try {
+            userId = await this.db.userIdByTransactionId(txn.originalTransactionId);
+        }
+        catch (err) {
+            console.log(`[receipt] webhook user lookup failed: ${err}`);
+            throw new ServiceError("INTERNAL", "failed to look up transaction");
+        }
         if (!userId && txn.appAccountToken)
             userId = txn.appAccountToken;
         if (!userId) {

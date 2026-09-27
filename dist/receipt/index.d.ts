@@ -1,5 +1,9 @@
 export interface ReceiptDB {
     upsertSubscription(userId: string, productId: string, originalTransactionId: string, status: string, expiresAt: Date | string | null, priceCents: number, currencyCode: string): Promise<void>;
+    /**
+     * Resolves "" when no user owns the transaction. Throw only for a read
+     * failure: processWebhook then fails so Apple retries the notification.
+     */
     userIdByTransactionId(originalTransactionId: string): Promise<string>;
     storeTransaction(t: VerifiedTransaction): Promise<void>;
 }

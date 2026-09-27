@@ -167,11 +167,20 @@ describe("ReceiptService", () => {
 
     it("calls onNotification for a unknown transaction too", async () => {
       const onNotification = vi.fn().mockResolvedValue(undefined);
-      const db = mockDB({ userIdByTransactionId: vi.fn().mockRejectedValue(new Error("not found")) });
+      const db = mockDB({ userIdByTransactionId: vi.fn().mockResolvedValue("") });
       const svc = svcWith(db, { notificationType: "SUBSCRIBED", data: { signedTransactionInfo: "txn.jws.sig" } }, baseTxn, { onNotification });
       const result = await svc.processWebhook("outer.jws.sig");
       expect(result.status).toBe("unknown_transaction");
       expect(onNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it("throws when the user lookup read fails so Apple retries", async () => {
+      const db = mockDB({ userIdByTransactionId: vi.fn().mockRejectedValue(new Error("db down")) });
+      const svc = svcWith(db, { notificationType: "REFUND", data: { signedTransactionInfo: "txn.jws.sig" } }, revoked);
+      const err = await svc.processWebhook("outer.jws.sig").catch((e) => e);
+      expect(err).toBeInstanceOf(ServiceError);
+      expect(err.code).toBe("INTERNAL");
+      expect(db.upsertSubscription).not.toHaveBeenCalled();
     });
 
     it("throws when onNotification fails so Apple retries", async () => {
